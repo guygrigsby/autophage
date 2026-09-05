@@ -140,10 +140,13 @@ func scriptedModel(t *testing.T) ac.ChatModel {
 			}), nil
 		case 2:
 			t.Log("scripted model: committing " + fixFile)
+			// No identity on the command line: the image bakes one in
+			// (deploy/Containerfile), and an agent that had to supply its
+			// own would be burning turns on "Author identity unknown".
 			return call("b1", "bash", map[string]any{
 				"command": "set -e\n" +
 					"git add " + fixFile + "\n" +
-					"git -c user.name=agent -c user.email=agent@autophage.invalid commit -q -m 'add " + fixFile + "'\n" +
+					"git commit -q -m 'add " + fixFile + "'\n" +
 					"git log -1 --format=%s\n",
 			}), nil
 		}

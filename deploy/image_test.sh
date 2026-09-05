@@ -78,6 +78,16 @@ run sh -c 'echo $GOMODCACHE' | grep -q '^/cache/go/mod$' || fail "GOMODCACHE not
 run sh -c 'test -w /tmp && test -w "$HOME"' || fail "/tmp or the agent home is not writable"
 if run sh -c 'curl -sS -m 3 https://proxy.golang.org >/dev/null 2>&1'; then fail "network reachable with --network=none"; fi
 
+# The brief tells the agent to commit as it goes, and its home is a tmpfs
+# that dies with the attempt, so the identity has to come from the image's
+# own system config. Proved through a real commit, in the agent shape.
+scratch commit
+author="$(agent "$SCRATCH_TMP" "$SCRATCH_VOL" sh -c 'set -e
+  cd /work && git init -q . && echo fix > a && git add a
+  git commit -q -m t && git log -1 --format="%an <%ae>"')"
+[ "$author" = 'autophage[bot] <autophage[bot]@users.noreply.github.com>' ] \
+  || fail "the image has no git identity: an agent commit is authored '$author'"
+
 # Everything a phase writes has to land on a mount: the root filesystem is
 # read-only, so this has to be checked with the volumes attached, the way the
 # daemon runs it.

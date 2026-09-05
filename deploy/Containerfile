@@ -80,6 +80,15 @@ RUN chmod 0755 /usr/local/bin/warm-deps /usr/local/bin/autophage-toolbox \
     && mkdir -p /work /cache/go/mod /cache/go/build /cache/npm /cache/npm/pnpm-store \
        /cache/npm/corepack /cache/uv /cache/uv/python \
     && chown -R agent:agent /work /cache
+# The brief tells the agent to commit as it goes, and git refuses to commit
+# without an identity ("Author identity unknown"), which costs an unattended
+# run turns it has no way to spend well. The home directory is a tmpfs that
+# dies with the attempt, so the identity is baked in system-wide instead. It
+# matches the daemon's own BotName and BotEmail (internal/sandbox Manager,
+# wired in cmd/autophaged), so the agent's commits and the ones host git
+# makes carry the same author.
+RUN git config --system user.name 'autophage[bot]' \
+    && git config --system user.email 'autophage[bot]@users.noreply.github.com'
 USER agent
 # GOFLAGS keeps -mod=mod: an attempt may need to touch go.mod/go.sum. GOPROXY=off
 # is set by the daemon at run time for the agent phase, on top of this; the real
