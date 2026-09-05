@@ -17,12 +17,14 @@ import (
 // failing is retried on every sweep, which on the production floor is a paid
 // model call a minute, for ever, on a case nobody is waiting on.
 //
-// triageGiveUp is how many failures park the case instead: five is enough to
-// ride out a rate limit or a provider outage (a little over an hour with
-// this backoff) and few enough that a case the model genuinely cannot size
-// reaches a human the same day. Parking is a Large triage through the
-// ordinary path, so the case waits for the approval label with a rationale
-// saying why, rather than sitting Received where nothing surfaces it.
+// triageGiveUp is how many failures park the case instead. Five failures
+// means four waits of 1m, 2m, 4m and 8m, so the park lands about 15 minutes
+// after the first failure: long enough to ride out a rate limit or a short
+// provider outage, short enough that a case the model genuinely cannot size
+// reaches a human while the operator is still looking. Parking is a Large
+// triage through the ordinary path, so the case waits for the approval label
+// with a rationale saying why, rather than sitting Received where nothing
+// surfaces it.
 const (
 	triageBackoff    = time.Minute
 	triageBackoffCap = time.Hour
