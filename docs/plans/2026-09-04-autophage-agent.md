@@ -1604,7 +1604,7 @@ The runbook, executed by the operator, in order:
 7. Funnel: `tailscale funnel --bg --set-path /webhook/github http://127.0.0.1:8080/webhook/github`; `curl -si https://trig.guy.ts.net/webhook/github -X POST` must return 401 (unauthenticated, meaning the daemon answered). If Funnel is refused by the tailnet policy, enable it in the admin console's ACL (`"nodeAttrs": [{"target": ["trig"], "attr": ["funnel"]}]`).
 8. Service: `make install-systemd && systemctl --user status autophaged && loginctl enable-linger $USER`.
 9. Install the App on one test repository; open an issue as the owner with a small typo; `autophage cases` shows it Received then Queued then Attempting; within the auto budget it ends Done with a PR or AwaitingApproval with a comment. `autophage why <attempt>` prints the chain.
-10. Metrics: add `trig.guy.ts.net:8080/metrics` to bee's Prometheus over the tailnet (`tailscale serve --bg --set-path /metrics http://127.0.0.1:8080/metrics` on trig, tailnet only).
+10. Metrics: add `https://trig.guy.ts.net/metrics` to bee's Prometheus over the tailnet (`tailscale serve --bg --set-path /metrics http://127.0.0.1:8080/metrics` on trig, tailnet only).
 
 - [ ] **Step 1: Write the runbook and commit**
 
