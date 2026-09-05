@@ -198,8 +198,10 @@ Prints the jess ledger chain for that attempt.
 ssh trig tailscale serve --bg --set-path /metrics http://127.0.0.1:8080/metrics
 ```
 
-Tailnet only, never through Funnel. Add `trig.guy.ts.net:8080/metrics` as a
-scrape target in bee's Prometheus config (**operator**, edit on bee).
+Tailnet only, never through Funnel. Add `https://trig.guy.ts.net/metrics` as
+a scrape target in bee's Prometheus config (**operator**, edit on bee). The
+daemon itself listens on loopback only; `tailscale serve` is what publishes
+it, on 443, so port 8080 is not reachable from bee.
 
 ## Rollback
 
