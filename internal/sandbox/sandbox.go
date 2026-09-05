@@ -33,6 +33,15 @@ type Container struct {
 }
 
 // Sandbox is what the runner needs. The podman Manager implements it.
+//
+// CommitAndPush ends the agent phase itself before running any host git
+// command: it removes the workspace's agent container first and fails
+// closed if it cannot confirm the removal, since the runner's own call
+// order (Start, the agent's turns, CommitAndPush, Teardown) leaves no other
+// point that can guarantee the container is gone before host git trusts the
+// workspace's files again. Tools' returned closer and DiffLines are invalid
+// for that container once CommitAndPush has been called, whether or not it
+// succeeded.
 type Sandbox interface {
 	Prepare(ctx context.Context, repository, cloneURL, branch, defaultBranch, token string) (Workspace, error)
 	Start(ctx context.Context, ws Workspace, attemptID string) (Container, error)
@@ -53,8 +62,33 @@ type Manager struct {
 	BotEmail      string
 	Logf          func(string, ...any)
 
-	mu    sync.Mutex
-	locks map[string]chan struct{} // repository -> a capacity-1 mutex-as-channel
+	mu         sync.Mutex
+	locks      map[string]chan struct{} // repository -> a capacity-1 mutex-as-channel
+	containers map[string]string        // workspace path -> the agent container Start last recorded there
+}
+
+// recordContainer remembers which container Start just created for wsPath,
+// so CommitAndPush can end the agent phase itself without the Sandbox
+// interface having to pass a Container back into a method that only takes a
+// Workspace.
+func (m *Manager) recordContainer(wsPath, name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.containers == nil {
+		m.containers = map[string]string{}
+	}
+	m.containers[wsPath] = name
+}
+
+// forgetContainer removes and returns the container name recorded for
+// wsPath, or "" if none is recorded (Start was never called for this
+// workspace, or a previous call already consumed it).
+func (m *Manager) forgetContainer(wsPath string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	name := m.containers[wsPath]
+	delete(m.containers, wsPath)
+	return name
 }
 
 // lock acquires the exclusive workspace lock for repository, blocking until

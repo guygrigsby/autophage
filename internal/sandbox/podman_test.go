@@ -148,3 +148,99 @@ func TestVolumeSlugAvoidsCollisions(t *testing.T) {
 		t.Errorf("volumeSlug collided for %q and %q: %q", "a/b-c", "a-b/c", a)
 	}
 }
+
+// loggingPodmanStub writes a stub podman that appends its argv (one line
+// per invocation) to argsFile and exits 0, except that when failRM is set an
+// "rm" invocation instead exits 1 with an error other than "no such
+// container" on stderr - simulating a podman rm that genuinely failed
+// rather than one that found the container already gone.
+func loggingPodmanStub(t *testing.T, argsFile string, failRM bool) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "podman")
+	script := "#!/bin/sh\necho \"$@\" >> " + argsFile + "\n"
+	if failRM {
+		script += "case \"$1\" in\n  rm) echo 'Error: something went wrong' >&2; exit 1 ;;\n  *) exit 0 ;;\nesac\n"
+	} else {
+		script += "exit 0\n"
+	}
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// TestCommitAndPushEndsTheAgentPhaseBeforeGitRuns proves CommitAndPush kills
+// the agent container before it runs any host git command: the argv log
+// shows the rm -f call, and the push still lands (which the code can only
+// reach once killAgentContainer has returned nil).
+func TestCommitAndPushEndsTheAgentPhaseBeforeGitRuns(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	bin := loggingPodmanStub(t, argsFile, false)
+	m := &Manager{Podman: bin, Image: "img", WorkspacesDir: t.TempDir(), BotName: "autophage[bot]", BotEmail: "autophage[bot]@users.noreply.github.com", Logf: t.Logf}
+	bare := origin(t)
+	ctx := t.Context()
+
+	ws, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := m.Start(ctx, ws, "attempt-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "fix.txt"), []byte("fixed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sha, pushed, err := m.CommitAndPush(ctx, ws, "tok", "autophage: end agent phase first")
+	if err != nil || !pushed || len(sha) != 40 {
+		t.Fatalf("push: %s %v %v", sha, pushed, err)
+	}
+
+	recorded, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(recorded), "rm -f "+c.Name) {
+		t.Errorf("CommitAndPush did not remove the agent container %s:\n%s", c.Name, recorded)
+	}
+	if got := git(t, bare, "log", "-1", "--format=%s", "autophage/7"); got != "autophage: end agent phase first" {
+		t.Errorf("push did not land: %q", got)
+	}
+	if err := m.Teardown(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCommitAndPushFailsClosedWhenItCannotConfirmTheContainerIsGone proves
+// CommitAndPush refuses to touch git, let alone push with the token in
+// scope, when it cannot confirm the agent container was removed.
+func TestCommitAndPushFailsClosedWhenItCannotConfirmTheContainerIsGone(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	bin := loggingPodmanStub(t, argsFile, true)
+	m := &Manager{Podman: bin, Image: "img", WorkspacesDir: t.TempDir(), BotName: "autophage[bot]", BotEmail: "autophage[bot]@users.noreply.github.com", Logf: t.Logf}
+	bare := origin(t)
+	ctx := t.Context()
+
+	ws, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Start(ctx, ws, "attempt-y"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "fix.txt"), []byte("fixed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, pushed, err := m.CommitAndPush(ctx, ws, "tok", "should not land")
+	if err == nil {
+		t.Fatal("expected CommitAndPush to fail closed when it cannot confirm the container is gone")
+	}
+	if pushed {
+		t.Error("pushed should be false on a fail-closed CommitAndPush")
+	}
+	if got := git(t, bare, "for-each-ref", "--format=%(refname)"); got != "refs/heads/main" {
+		t.Errorf("a commit landed despite the fail-closed container removal: refs = %q", got)
+	}
+}

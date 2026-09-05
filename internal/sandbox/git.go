@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,18 +53,37 @@ func gitEnv(token string) (env []string, auth string) {
 	return env, auth
 }
 
+// redactedError carries a secret-scrubbed message while still unwrapping to
+// the real underlying error (an *exec.ExitError or the context error run or
+// out wrapped exactly once via %w), so errors.Is and errors.As still see
+// through a redacted git failure. Its own Error() is the redacted text;
+// nothing here re-exposes the intermediate run/out wrapper, whose own
+// Error() embeds the (pre-redaction) command line and output.
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.err }
+
 // redactAuth scrubs auth (the base64 credential, not just the argv form of
-// it) from s and from err's text, in case it ever surfaces in git's own
-// output or an error message rather than staying confined to the env var.
+// it) from s and from err's message, in case it ever surfaces in git's own
+// output rather than staying confined to the env var. The returned error
+// unwraps directly to the real *exec.ExitError or context error beneath
+// run/out's own wrapper, never to that unredacted wrapper itself.
 func redactAuth(s string, err error, auth string) (string, error) {
 	if auth == "" {
 		return s, err
 	}
 	s = strings.ReplaceAll(s, auth, "<redacted>")
-	if err != nil {
-		err = fmt.Errorf("%s", strings.ReplaceAll(err.Error(), auth, "<redacted>"))
+	if err == nil {
+		return s, nil
 	}
-	return s, err
+	return s, &redactedError{
+		msg: strings.ReplaceAll(err.Error(), auth, "<redacted>"),
+		err: errors.Unwrap(err),
+	}
 }
 
 // git runs one git command with combined output. Use gitOut instead when
@@ -162,7 +182,7 @@ func (m *Manager) checkout(ctx context.Context, repository, cloneURL, branch, de
 		if err := resetGitConfig(path, cloneURL); err != nil {
 			return Workspace{}, fmt.Errorf("reset git config for %s: %w", repository, err)
 		}
-		if _, err := m.git(ctx, path, token, "-c", "remote.origin.url="+cloneURL, "fetch", "--prune", "origin"); err != nil {
+		if _, err := m.git(ctx, path, token, "fetch", "--prune", "origin"); err != nil {
 			return Workspace{}, fmt.Errorf("fetch %s: %w", repository, err)
 		}
 		_, _ = m.git(ctx, path, "", "rebase", "--abort")
@@ -199,12 +219,20 @@ func (m *Manager) checkout(ctx context.Context, repository, cloneURL, branch, de
 	return Workspace{Path: path, Repository: repository, CloneURL: cloneURL, Branch: branch, DefaultBranch: defaultBranch, BaseSha: base}, nil
 }
 
-// CommitAndPush stages everything, commits when there is anything to commit
-// and pushes the branch with force-with-lease. The first push of a fresh
-// branch always happens so the branch exists remotely.
+// CommitAndPush ends the agent phase, stages everything, commits when there
+// is anything to commit and pushes the branch with force-with-lease. The
+// first push of a fresh branch always happens so the branch exists
+// remotely.
 func (m *Manager) CommitAndPush(ctx context.Context, ws Workspace, token, message string) (string, bool, error) {
-	// The container that just ran may have rewritten .git/config; never
-	// trust it before pushing with the token in scope.
+	// The runner's own order is Start, the agent's turns, CommitAndPush,
+	// Teardown: this is the only point that can guarantee the container is
+	// gone before host git runs. Fails closed rather than trusting the
+	// workspace while the agent might still be rewriting .git/config.
+	if err := m.killAgentContainer(ctx, ws.Path); err != nil {
+		return "", false, err
+	}
+	// The container may have rewritten .git/config before it was removed;
+	// never trust it before pushing with the token in scope.
 	if err := resetGitConfig(ws.Path, ws.CloneURL); err != nil {
 		return "", false, fmt.Errorf("reset git config for %s: %w", ws.Repository, err)
 	}
@@ -224,7 +252,7 @@ func (m *Manager) CommitAndPush(ctx context.Context, ws Workspace, token, messag
 	if err != nil {
 		return "", false, err
 	}
-	if _, err := m.git(ctx, ws.Path, token, "-c", "remote.origin.url="+ws.CloneURL, "push", "--force-with-lease", "origin", "HEAD:refs/heads/"+ws.Branch); err != nil {
+	if _, err := m.git(ctx, ws.Path, token, "push", "--force-with-lease", "origin", "HEAD:refs/heads/"+ws.Branch); err != nil {
 		return head, false, err
 	}
 	return head, true, nil

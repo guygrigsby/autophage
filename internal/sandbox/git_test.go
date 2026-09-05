@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -222,8 +223,8 @@ func TestCommitAndPushIgnoresHostileGitConfig(t *testing.T) {
 	if got := git(t, bare, "log", "-1", "--format=%s", "autophage/7"); got != "autophage: ignore hostile config" {
 		t.Errorf("push did not land on the real remote: %q", got)
 	}
-	if got := git(t, hostile, "log", "--format=%s", "HEAD"); got != "seed" {
-		t.Errorf("push leaked to the hostile remote: %q", got)
+	if got := git(t, hostile, "for-each-ref", "--format=%(refname)"); got != "refs/heads/main" {
+		t.Errorf("push leaked to the hostile remote: refs = %q", got)
 	}
 	if cfg := git(t, ws.Path, "config", "--list"); strings.Contains(cfg, "tok") || strings.Contains(cfg, "extraheader") || strings.Contains(cfg, "pwned") {
 		t.Errorf("hostile or leaked config survived:\n%s", cfg)
@@ -245,17 +246,19 @@ func TestPrepareLocksPerRepository(t *testing.T) {
 	}
 	c1 := Container{Name: "fake-container-1", Workspace: ws1}
 
-	done := make(chan struct{})
+	// The goroutine reports its result over a channel rather than calling
+	// t.Error/t.Fatal itself: a testing.T method called from a goroutine
+	// other than the test's own is not safe, so every assertion happens
+	// back in this goroutine.
+	results := make(chan error, 1)
 	go func() {
-		defer close(done)
-		if _, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok"); err != nil {
-			t.Error(err)
-		}
+		_, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+		results <- err
 	}()
 
 	select {
-	case <-done:
-		t.Fatal("second Prepare returned before the first attempt's Teardown released the lock")
+	case err := <-results:
+		t.Fatalf("second Prepare returned (err=%v) before the first attempt's Teardown released the lock", err)
 	case <-time.After(200 * time.Millisecond):
 	}
 
@@ -264,7 +267,10 @@ func TestPrepareLocksPerRepository(t *testing.T) {
 	}
 
 	select {
-	case <-done:
+	case err := <-results:
+		if err != nil {
+			t.Errorf("second Prepare failed once the lock was released: %v", err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("second Prepare did not unblock after Teardown released the lock")
 	}
@@ -323,5 +329,43 @@ func TestWorkspacePathRejectsMalformedRepository(t *testing.T) {
 	}
 	if _, err := m.workspacePath("guy/repo"); err != nil {
 		t.Errorf("workspacePath(good) failed: %v", err)
+	}
+}
+
+// TestRedactedGitErrorPreservesTheChain proves redactAuth's scrubbing does
+// not cut errors.Is/errors.As off from the real underlying failure: a
+// caller still needs to tell a timeout from an ordinary git failure, and
+// still needs *exec.ExitError (for its exit code) through a redacted error.
+func TestRedactedGitErrorPreservesTheChain(t *testing.T) {
+	m := manager(t)
+
+	// rev-parse against an empty directory: git exits non-zero, so the
+	// redacted error must still unwrap to the real *exec.ExitError.
+	_, err := m.git(t.Context(), t.TempDir(), "super-secret-token", "rev-parse", "HEAD")
+	if err == nil {
+		t.Fatal("expected an error against an empty directory")
+	}
+	if strings.Contains(err.Error(), "super-secret-token") {
+		t.Fatalf("token leaked into redacted error: %v", err)
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("errors.As(*exec.ExitError) failed through the redacted error: %v", err)
+	}
+
+	// A command run against an already-expired context must still be
+	// errors.Is(context.DeadlineExceeded) through the same redaction path.
+	expired, cancel := context.WithTimeout(t.Context(), 0)
+	defer cancel()
+	<-expired.Done()
+	_, err = m.git(expired, t.TempDir(), "super-secret-token", "fetch", "origin")
+	if err == nil {
+		t.Fatal("expected an error against an expired context")
+	}
+	if strings.Contains(err.Error(), "super-secret-token") {
+		t.Fatalf("token leaked into redacted timeout error: %v", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("errors.Is(context.DeadlineExceeded) failed through the redacted error: %v", err)
 	}
 }

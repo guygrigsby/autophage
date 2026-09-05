@@ -94,6 +94,7 @@ func (m *Manager) Start(ctx context.Context, ws Workspace, attemptID string) (Co
 		m.unlock(ws.Repository)
 		return Container{}, fmt.Errorf("start container: %w", err)
 	}
+	m.recordContainer(ws.Path, name)
 	return Container{Name: name, Workspace: ws}, nil
 }
 
@@ -129,16 +130,39 @@ func (m *Manager) DiffLines(ctx context.Context, c Container, baseSha string) (i
 }
 
 // Teardown removes the container and releases the workspace lock Prepare
-// acquired and Start held onto. The lock is released before the podman rm
-// attempt, not deferred after it, so a Teardown against a broken or missing
-// podman binary still frees the repository for the next attempt.
+// acquired and Start held onto. The unlock is deferred, so it runs after the
+// podman rm attempt returns (or if this function panics), not before: the
+// next attempt's Prepare must not start touching /work while this container
+// might still have it mounted. The 2 minute ctx bounds a hung podman.
 func (m *Manager) Teardown(ctx context.Context, c Container) error {
-	m.unlock(c.Workspace.Repository)
+	defer m.unlock(c.Workspace.Repository)
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	stdout, err := run(ctx, "", nil, m.podman(), "rm", "-f", c.Name)
 	if err != nil && !strings.Contains(stdout, "no such container") {
 		return err
+	}
+	return nil
+}
+
+// killAgentContainer ends the agent phase for wsPath before CommitAndPush
+// runs any host git command: the runner's fixed call order (Start, the
+// agent's turns, CommitAndPush, Teardown) leaves this as the only point
+// that can guarantee the container is gone before host git trusts the
+// workspace again. Fails closed: any removal failure other than the
+// container already being gone stops the caller before it touches git or
+// pushes with the token in scope. A wsPath with no recorded container (no
+// Start was ever called, or a previous call already consumed it) is a no-op.
+func (m *Manager) killAgentContainer(ctx context.Context, wsPath string) error {
+	name := m.forgetContainer(wsPath)
+	if name == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	stdout, err := run(ctx, "", nil, m.podman(), "rm", "-f", name)
+	if err != nil && !strings.Contains(stdout, "no such container") {
+		return fmt.Errorf("end agent phase: remove container %s: %w", name, err)
 	}
 	return nil
 }
