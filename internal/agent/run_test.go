@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,6 +28,27 @@ func (e *echoTool) Execute(context.Context, json.RawMessage) (json.RawMessage, e
 	e.calls.Add(1)
 	return json.RawMessage(`{"ok":true}`), nil
 }
+
+// memLedger is a minimal in-memory DurableSink: it commits and records every
+// event to a slice under a mutex. A real (non-discard) DurableSink is what
+// jess's audit gate requires before a non-safe tool call is allowed to run
+// at all, so this is what lets echoTool's calls actually reach
+// budgetTool.Execute in these tests.
+type memLedger struct {
+	mu     sync.Mutex
+	events []ledger.Event
+}
+
+func (m *memLedger) Record(e ledger.Event) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.events = append(m.events, e)
+	return nil
+}
+
+func (m *memLedger) CommitAction(e ledger.Event) error { return m.Record(e) }
+
+var _ ledger.DurableSink = (*memLedger)(nil)
 
 // scripted plays a sequence: n tool calls, then a final text. A real model
 // cannot emit a tool call for a tool it was never offered, so once the
@@ -65,13 +87,8 @@ func input(t *testing.T, model ac.ChatModel, tool ac.Tool, turns int, wall time.
 	// non-safe tool call outright (it never reaches budgetTool.Execute), which
 	// would also stop the diff-line tracker from ever seeing a call. Every
 	// test here needs the tool to actually run, so the ledger is a real
-	// (temp-file) SQLite sink throughout.
-	sqlite, err := ledger.OpenSQLite(t.TempDir() + "/l.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = sqlite.Close() })
-	return RunInput{Model: model, Tools: []ac.Tool{tool}, Ledger: sqlite, Budget: b, Brief: "fix it", AgentID: "t", DiffLines: diffFn,
+	// (in-memory) durable sink throughout.
+	return RunInput{Model: model, Tools: []ac.Tool{tool}, Ledger: &memLedger{}, Budget: b, Brief: "fix it", AgentID: "t", DiffLines: diffFn,
 		Clock: resolution.SystemClock{}, Logf: t.Logf, OnRunBegan: func(id string) { runID = id }}, &runID
 }
 
@@ -95,8 +112,8 @@ func TestRunStopsOnTurnsThenForcesSummary(t *testing.T) {
 	var steered atomic.Bool
 	in, _ := input(t, scripted(100, goodSummary, &steered), tool, 5, time.Minute, 100, nil)
 	rep := RunAttempt(t.Context(), in)
-	if rep.Stop != StopTurns {
-		t.Fatalf("stop = %q, want turns", rep.Stop)
+	if rep.Stop != StopTurns || rep.Err != nil {
+		t.Fatalf("stop = %q, err = %v, want turns and no error", rep.Stop, rep.Err)
 	}
 	if !strings.Contains(rep.Summary, "What I found") {
 		t.Errorf("no forced summary: %q", rep.Summary)
@@ -108,12 +125,12 @@ func TestRunStopsOnTurnsThenForcesSummary(t *testing.T) {
 
 func TestRunStopsOnDiffLines(t *testing.T) {
 	tool := &echoTool{}
-	lines := 0
-	diff := func(context.Context) (int, error) { lines += 60; return lines, nil }
+	var lines atomic.Int64
+	diff := func(context.Context) (int, error) { return int(lines.Add(60)), nil }
 	in, _ := input(t, scripted(100, goodSummary, nil), tool, 50, time.Minute, 100, diff)
 	rep := RunAttempt(t.Context(), in)
-	if rep.Stop != StopDiffLines || tool.calls.Load() > 3 {
-		t.Fatalf("stop = %q calls = %d", rep.Stop, tool.calls.Load())
+	if rep.Stop != StopDiffLines || rep.Err != nil || tool.calls.Load() > 3 {
+		t.Fatalf("stop = %q err = %v calls = %d", rep.Stop, rep.Err, tool.calls.Load())
 	}
 	if rep.Usage.DiffLines < 100 || !strings.Contains(rep.Summary, "What I found") {
 		t.Errorf("report = %+v", rep)
@@ -121,7 +138,14 @@ func TestRunStopsOnDiffLines(t *testing.T) {
 }
 
 func TestRunStopsOnWallClock(t *testing.T) {
-	slow := jess.Once(true, func(ctx context.Context, _ []ac.Message, _ []ac.ToolSpec) (*ac.LLMResponse, error) {
+	// A real model can't emit a tool call for a tool it was never offered
+	// (see scripted's comment above): the forced-summary turn calls
+	// SetTools() with none, so a well-behaved model answers with plain text
+	// right away instead of taking the slow tool-use path below.
+	slow := jess.Once(true, func(ctx context.Context, _ []ac.Message, tools []ac.ToolSpec) (*ac.LLMResponse, error) {
+		if len(tools) == 0 {
+			return &ac.LLMResponse{Message: ac.Message{Role: ac.RoleAssistant, Content: []ac.ContentBlock{ac.TextBlock(goodSummary)}, StopReason: ac.StopReasonStop}}, nil
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -137,6 +161,9 @@ func TestRunStopsOnWallClock(t *testing.T) {
 	}
 	if time.Since(start) > 4*time.Second {
 		t.Error("wall clock stop did not cut the model call short")
+	}
+	if !strings.Contains(rep.Summary, "What I found") {
+		t.Errorf("no forced summary after a wall clock stop: %q", rep.Summary)
 	}
 }
 

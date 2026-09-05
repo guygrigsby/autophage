@@ -6,6 +6,8 @@ import (
 	"sync"
 
 	ac "github.com/voocel/agentcore"
+
+	"github.com/guygrigsby/jess"
 )
 
 // budgetTool runs the inner tool, then measures the diff. Crossing the
@@ -33,6 +35,35 @@ func (b *budgetTool) Execute(ctx context.Context, args json.RawMessage) (json.Ra
 		b.abort()
 	}
 	return out, err
+}
+
+// Safe reports whether the wrapped tool may bypass the gate's durable-record
+// requirement. Embedding only ac.Tool drops this and the two interfaces
+// below, so budgetTool forwards each explicitly: the inner tool's answer
+// when it declares one, the conservative default (not safe, not read-only,
+// not concurrency-safe) otherwise.
+func (b *budgetTool) Safe() bool {
+	if s, ok := b.Tool.(jess.SafeTool); ok {
+		return s.Safe()
+	}
+	return false
+}
+
+// ReadOnly implements ac.ReadOnlyer by forwarding to the wrapped tool.
+func (b *budgetTool) ReadOnly(args json.RawMessage) bool {
+	if r, ok := b.Tool.(ac.ReadOnlyer); ok {
+		return r.ReadOnly(args)
+	}
+	return false
+}
+
+// ConcurrencySafe implements ac.ConcurrencySafer by forwarding to the wrapped
+// tool.
+func (b *budgetTool) ConcurrencySafe(args json.RawMessage) bool {
+	if c, ok := b.Tool.(ac.ConcurrencySafer); ok {
+		return c.ConcurrencySafe(args)
+	}
+	return false
 }
 
 // stopFlag is the first stop reason, set once, plus the last diff count.
