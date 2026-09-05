@@ -199,16 +199,29 @@ func TestCommitAndPushIgnoresHostileGitConfig(t *testing.T) {
 		t.Fatalf("ws.CloneURL = %q, want %q", ws.CloneURL, bare)
 	}
 
+	// Two of the hostile keys are wired to touch a file, so the test can
+	// tell "git ignored the config" from "git ran it and nothing visible
+	// happened": credential.helper runs whenever git asks for credentials,
+	// and core.fsmonitor runs on the very first status or add in the
+	// workspace.
+	pwn := t.TempDir()
+	credPwned := filepath.Join(pwn, "credential-helper-ran")
+	fsmonitorPwned := filepath.Join(pwn, "fsmonitor-ran")
+	fsmonitorScript := filepath.Join(pwn, "fsmonitor.sh")
+	if err := os.WriteFile(fsmonitorScript, []byte("#!/bin/sh\ntouch "+fsmonitorPwned+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	hostileConfig := fmt.Sprintf(`[remote "origin"]
 	url = %s
 	fetch = +refs/heads/*:refs/remotes/origin/*
 [core]
 	sshCommand = touch /tmp/autophage-pwned
+	fsmonitor = "%s"
 [credential]
-	helper = "!echo pwned"
+	helper = "!touch %s"
 [alias]
 	push = "!echo pwned"
-`, hostile)
+`, hostile, fsmonitorScript, credPwned)
 	if err := os.WriteFile(filepath.Join(ws.Path, ".git", "config"), []byte(hostileConfig), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -228,6 +241,124 @@ func TestCommitAndPushIgnoresHostileGitConfig(t *testing.T) {
 	}
 	if cfg := git(t, ws.Path, "config", "--list"); strings.Contains(cfg, "tok") || strings.Contains(cfg, "extraheader") || strings.Contains(cfg, "pwned") {
 		t.Errorf("hostile or leaked config survived:\n%s", cfg)
+	}
+	for _, marker := range []string{credPwned, fsmonitorPwned} {
+		if _, err := os.Stat(marker); err == nil {
+			t.Errorf("host git executed a program the hostile config named: %s exists", marker)
+		}
+	}
+}
+
+// TestCommitAndPushUsesTheRecordedLease proves the push lease comes from the
+// fetch Prepare did, not from a ref in the workspace. The agent owns .git
+// for the whole attempt, so refs/remotes/origin/<branch> at push time is
+// whatever it last wrote there: a bare --force-with-lease would either be
+// waved through or blocked by the agent at will.
+func TestCommitAndPushUsesTheRecordedLease(t *testing.T) {
+	m := manager(t)
+	bare := origin(t)
+	ctx := t.Context()
+
+	ws, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws.RemoteHead != "" {
+		t.Errorf("RemoteHead = %q for a branch that does not exist on the remote yet", ws.RemoteHead)
+	}
+	// The agent points the remote-tracking ref at an unrelated commit. The
+	// recorded lease is empty ("this branch must not exist yet"), which is
+	// still true on the remote, so the push must land.
+	git(t, ws.Path, "update-ref", "refs/remotes/origin/autophage/7", ws.BaseSha)
+	if err := os.WriteFile(filepath.Join(ws.Path, "fix.txt"), []byte("fixed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, pushed, err := m.CommitAndPush(ctx, ws, "tok", "autophage: first pass"); err != nil || !pushed {
+		t.Fatalf("push under the recorded lease: %v %v", pushed, err)
+	}
+	if err := m.Teardown(ctx, Container{Workspace: ws}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second attempt: the lease is the branch head Prepare fetched. Someone
+	// else pushes to the branch afterwards, so the push must be refused.
+	ws2, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ws2.RemoteHead) != 40 {
+		t.Fatalf("RemoteHead = %q, want the branch head Prepare fetched", ws2.RemoteHead)
+	}
+	other := filepath.Join(t.TempDir(), "other")
+	git(t, filepath.Dir(other), "clone", "-q", "-b", "autophage/7", bare, other)
+	if err := os.WriteFile(filepath.Join(other, "theirs.txt"), []byte("theirs\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, other, "add", "theirs.txt")
+	git(t, other, "commit", "-q", "-m", "theirs")
+	git(t, other, "push", "-q", "origin", "autophage/7")
+
+	if err := os.WriteFile(filepath.Join(ws2.Path, "ours.txt"), []byte("ours\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, pushed, err := m.CommitAndPush(ctx, ws2, "tok", "autophage: second pass")
+	if err == nil || pushed {
+		t.Fatal("push must be refused once the remote branch moved under the recorded lease")
+	}
+	if got := git(t, bare, "log", "-1", "--format=%s", "autophage/7"); got != "theirs" {
+		t.Errorf("the refused push landed anyway: remote log = %q", got)
+	}
+}
+
+// TestTeardownReleasesOnlyItsOwnLease proves a stale Teardown cannot hand a
+// workspace to a third attempt while a second one is still running in it:
+// the lock is released by the holder's token, not by repository name.
+func TestTeardownReleasesOnlyItsOwnLease(t *testing.T) {
+	m := manager(t)
+	bare := origin(t)
+	ctx := t.Context()
+
+	ws1, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Teardown(ctx, Container{Name: "c1", Workspace: ws1}); err != nil {
+		t.Fatal(err)
+	}
+
+	ws2, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first attempt's Teardown runs a second time (a retry, a
+	// double-deferred cleanup) while the second attempt holds the lock.
+	if err := m.Teardown(ctx, Container{Name: "c1", Workspace: ws1}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The goroutine reports over a channel: a testing.T method called from
+	// a goroutine other than the test's own is not safe.
+	third := make(chan error, 1)
+	go func() {
+		_, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+		third <- err
+	}()
+	select {
+	case err := <-third:
+		t.Fatalf("the stale Teardown released the second attempt's lock (third Prepare returned err=%v)", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if err := m.Teardown(ctx, Container{Name: "c2", Workspace: ws2}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-third:
+		if err != nil {
+			t.Errorf("third Prepare failed once the holder released the lock: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("third Prepare did not unblock after the holder's Teardown")
 	}
 }
 
@@ -341,7 +472,7 @@ func TestRedactedGitErrorPreservesTheChain(t *testing.T) {
 
 	// rev-parse against an empty directory: git exits non-zero, so the
 	// redacted error must still unwrap to the real *exec.ExitError.
-	_, err := m.git(t.Context(), t.TempDir(), "super-secret-token", "rev-parse", "HEAD")
+	_, err := m.gitRemote(t.Context(), t.TempDir(), "super-secret-token", "https://github.com/guy/repo.git", time.Minute, "rev-parse", "HEAD")
 	if err == nil {
 		t.Fatal("expected an error against an empty directory")
 	}
@@ -358,7 +489,7 @@ func TestRedactedGitErrorPreservesTheChain(t *testing.T) {
 	expired, cancel := context.WithTimeout(t.Context(), 0)
 	defer cancel()
 	<-expired.Done()
-	_, err = m.git(expired, t.TempDir(), "super-secret-token", "fetch", "origin")
+	_, err = m.gitRemote(expired, t.TempDir(), "super-secret-token", "https://github.com/guy/repo.git", time.Minute, "fetch", "origin")
 	if err == nil {
 		t.Fatal("expected an error against an expired context")
 	}

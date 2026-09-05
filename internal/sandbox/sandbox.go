@@ -22,6 +22,26 @@ type Workspace struct {
 	Branch        string
 	DefaultBranch string
 	BaseSha       string // origin/<default> the branch was rebased onto
+	// RemoteHead is refs/remotes/origin/<Branch> as Prepare's own fetch left
+	// it, empty when the branch does not exist on the remote yet. It is the
+	// expected value CommitAndPush pushes under: the ref cannot be read
+	// again at push time, since by then the agent has had a container on
+	// /work and owns every ref in it.
+	RemoteHead string
+	// lease identifies the acquisition of the repository's workspace lock
+	// that produced this Workspace. unlock releases only for the holder, so
+	// a stale Teardown (a second call with a Workspace whose attempt is long
+	// over) cannot release the lock a later attempt is holding.
+	lease *lease
+}
+
+// lease is a lock acquisition token, compared by pointer. The fields are
+// what make one acquisition distinct from the next: Go is free to give every
+// allocation of a zero-size struct the same address, so an empty lease would
+// make each attempt's token equal to every other's.
+type lease struct {
+	repository string
+	seq        uint64
 }
 
 // Container is a running agent container.
@@ -41,7 +61,13 @@ type Container struct {
 // point that can guarantee the container is gone before host git trusts the
 // workspace's files again. Tools' returned closer and DiffLines are invalid
 // for that container once CommitAndPush has been called, whether or not it
-// succeeded.
+// succeeded. The closer must still be closed afterwards: it reaps the
+// podman exec child the toolbox runs in. It returns quickly, because the
+// container it was exec'd into is already gone.
+//
+// DiffLines is advisory. It runs inside the container, where the agent owns
+// .git and can make the count say whatever it likes; the enforced budget
+// legs are turns and wall clock, which the daemon counts itself.
 type Sandbox interface {
 	Prepare(ctx context.Context, repository, cloneURL, branch, defaultBranch, token string) (Workspace, error)
 	Start(ctx context.Context, ws Workspace, attemptID string) (Container, error)
@@ -63,7 +89,9 @@ type Manager struct {
 	Logf          func(string, ...any)
 
 	mu         sync.Mutex
+	seq        uint64                   // lease serial, so no two acquisitions share a token
 	locks      map[string]chan struct{} // repository -> a capacity-1 mutex-as-channel
+	holders    map[string]*lease        // repository -> the token of whoever holds that lock now
 	containers map[string]string        // workspace path -> the agent container Start last recorded there
 }
 
@@ -92,10 +120,11 @@ func (m *Manager) forgetContainer(wsPath string) string {
 }
 
 // lock acquires the exclusive workspace lock for repository, blocking until
-// it is free or ctx is done. Two attempts on the same repository must never
-// share one workspace: the scheduler's concurrency limit is across all
-// cases, not per repository, so this package owns the exclusion itself.
-func (m *Manager) lock(ctx context.Context, repository string) error {
+// it is free or ctx is done, and returns the token that owns the
+// acquisition. Two attempts on the same repository must never share one
+// workspace: the scheduler's concurrency limit is across all cases, not per
+// repository, so this package owns the exclusion itself.
+func (m *Manager) lock(ctx context.Context, repository string) (*lease, error) {
 	m.mu.Lock()
 	if m.locks == nil {
 		m.locks = map[string]chan struct{}{}
@@ -108,21 +137,38 @@ func (m *Manager) lock(ctx context.Context, repository string) error {
 	m.mu.Unlock()
 	select {
 	case ch <- struct{}{}:
-		return nil
+		m.mu.Lock()
+		m.seq++
+		held := &lease{repository: repository, seq: m.seq}
+		if m.holders == nil {
+			m.holders = map[string]*lease{}
+		}
+		m.holders[repository] = held
+		m.mu.Unlock()
+		return held, nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 }
 
-// unlock releases the workspace lock for repository. Safe to call more than
-// once, or for a repository whose lock was never acquired (a Prepare that
-// failed before reaching the lock, or a Teardown for a Container whose
-// Workspace is zero): draining an already-empty or nonexistent channel is a
-// no-op rather than a panic.
-func (m *Manager) unlock(repository string) {
+// unlock releases the workspace lock for repository, but only when held is
+// the token that currently owns it. Anything else is a no-op: a Teardown
+// called twice, or called with a Workspace from an attempt that has already
+// ended, must not hand the workspace to a third attempt while the second one
+// is still running in it. A zero Workspace (a Container built by hand, a
+// Prepare that failed before the lock) carries a nil token and releases
+// nothing.
+func (m *Manager) unlock(repository string, held *lease) {
+	if held == nil {
+		return
+	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.holders[repository] != held {
+		return
+	}
+	delete(m.holders, repository)
 	ch, ok := m.locks[repository]
-	m.mu.Unlock()
 	if !ok {
 		return
 	}
@@ -172,11 +218,16 @@ func out(ctx context.Context, dir string, env []string, name string, args ...str
 // defense-in-depth pass over the command line even though the auth header
 // itself now travels only through an env var (see git.go's redactAuth for
 // that half): nothing here relies on this being the only scrubbing.
+// The match is on ".extraheader=" anywhere in the argument, not on a
+// leading "http.extraheader=": the key is scoped per URL
+// ("http.https://github.com/.extraheader="), so a prefix match would miss
+// every form this package actually builds.
 func redact(args []string) []string {
+	const key = ".extraheader="
 	out := make([]string, len(args))
 	for i, a := range args {
-		if strings.HasPrefix(a, "http.extraheader=") {
-			a = "http.extraheader=<redacted>"
+		if j := strings.Index(a, key); j >= 0 {
+			a = a[:j+len(key)] + "<redacted>"
 		}
 		out[i] = a
 	}

@@ -11,25 +11,84 @@ import (
 	"time"
 )
 
-const gitTimeout = 5 * time.Minute
+const (
+	gitTimeout = 5 * time.Minute
+	// cloneTimeout bounds the first clone of a repository. A clone pulls the
+	// whole history over the network and can take far longer than any later
+	// fetch, so sharing gitTimeout with the rest would abort a first attempt
+	// on a large repository that was making perfectly good progress.
+	cloneTimeout = 20 * time.Minute
+)
 
 // authEnvVar names the environment variable a per-command --config-env
 // passes the GitHub auth header through. Never argv, never a repository's
 // own config: see gitArgs and resetGitConfig.
 const authEnvVar = "AUTOPHAGE_GIT_AUTH"
 
-// gitArgs prefixes every git invocation with the identity, the hooks and
-// fsmonitor overrides, and, when withAuth is set, a --config-env that scopes
-// the auth header to https://github.com/ only and reads its value from
-// authEnvVar rather than argv. Nothing here is ever written to the
-// repository's own config.
-func (m *Manager) gitArgs(withAuth bool, args ...string) []string {
+// hardeningArgs are the -c overrides every host git command carries. The
+// workspace's .git/config is attacker-controlled: /work is bind-mounted
+// whole into the agent container, and a container the daemon failed to
+// remove (podman containers are owned by conmon, not by the daemon, so one
+// can outlive a restart) may still be rewriting that file while host git
+// runs. Every key git can turn into an exec surface is therefore pinned to a
+// harmless value on the command line, which the file cannot outrank: the
+// credential helper list (an empty value resets it), the ssh command, the
+// askpass program, the git:// proxy command and the upload-pack hook.
+// protocol.allow=never then refuses every transport except the ones the
+// caller explicitly needs, which is what kills a hostile
+// remote.origin.url = "ext::sh -c ...". resetGitConfig is the second layer,
+// not the only one: it rewrites the file before these commands run, but it
+// cannot win a race against a process that is still writing it.
+func hardeningArgs(remote string) []string {
+	args := []string{
+		"-c", "core.hooksPath=/dev/null",
+		"-c", "core.fsmonitor=false",
+		"-c", "credential.helper=",
+		"-c", "core.sshCommand=",
+		"-c", "core.askPass=",
+		"-c", "core.gitProxy=",
+		"-c", "uploadpack.packObjectsHook=",
+		"-c", "protocol.allow=never",
+		"-c", "protocol.https.allow=always",
+	}
+	if isLocalRemote(remote) {
+		args = append(args, "-c", "protocol.file.allow=always")
+	}
+	return args
+}
+
+// isLocalRemote reports whether remote names a path on this machine or a
+// file:// URL rather than a network URL. The file transport is enabled only
+// for those (the tests' bare remotes): a clone URL minted for a GitHub
+// installation is always https, so nothing in production ever needs it.
+func isLocalRemote(remote string) bool {
+	if remote == "" {
+		return false
+	}
+	if strings.HasPrefix(remote, "file://") {
+		return true
+	}
+	if strings.Contains(remote, "://") {
+		return false
+	}
+	// scp-like syntax (host:path, no slash before the colon) is ssh.
+	if i := strings.Index(remote, ":"); i >= 0 && !strings.Contains(remote[:i], "/") {
+		return false
+	}
+	return true
+}
+
+// gitArgs prefixes every git invocation with the identity, the hardening
+// overrides for remote (empty for a local-only command) and, when withAuth
+// is set, a --config-env that scopes the auth header to https://github.com/
+// only and reads its value from authEnvVar rather than argv. Nothing here is
+// ever written to the repository's own config.
+func (m *Manager) gitArgs(remote string, withAuth bool, args ...string) []string {
 	base := []string{
 		"-c", "user.name=" + m.BotName,
 		"-c", "user.email=" + m.BotEmail,
-		"-c", "core.hooksPath=/dev/null",
-		"-c", "core.fsmonitor=false",
 	}
+	base = append(base, hardeningArgs(remote)...)
 	if withAuth {
 		base = append(base, "--config-env=http.https://github.com/.extraheader="+authEnvVar)
 	}
@@ -86,23 +145,35 @@ func redactAuth(s string, err error, auth string) (string, error) {
 	}
 }
 
-// git runs one git command with combined output. Use gitOut instead when
-// the output must be parsed.
-func (m *Manager) git(ctx context.Context, dir, token string, args ...string) (string, error) {
+// git runs one local git command with combined output: no token, no remote,
+// no transport. Use gitOut instead when the output must be parsed, and
+// gitRemote for anything that reaches the network.
+func (m *Manager) git(ctx context.Context, dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
-	env, auth := gitEnv(token)
-	s, err := run(ctx, dir, env, "git", m.gitArgs(token != "", args...)...)
-	return redactAuth(s, err, auth)
+	env, _ := gitEnv("")
+	return run(ctx, dir, env, "git", m.gitArgs("", false, args...)...)
 }
 
-// gitOut runs one git command and returns stdout alone, for callers that
-// parse the result (a sha).
-func (m *Manager) gitOut(ctx context.Context, dir, token string, args ...string) (string, error) {
+// gitOut runs one local git command and returns stdout alone, for callers
+// that parse the result (a sha).
+func (m *Manager) gitOut(ctx context.Context, dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
+	env, _ := gitEnv("")
+	return out(ctx, dir, env, "git", m.gitArgs("", false, args...)...)
+}
+
+// gitRemote runs the one class of git command that reaches the network, with
+// the token in scope. remote is always passed positionally by the caller as
+// well, never read from the workspace's config: a clone, fetch or push that
+// resolved its URL through .git/config would be handing the installation
+// token to whatever the agent last wrote there.
+func (m *Manager) gitRemote(ctx context.Context, dir, token, remote string, timeout time.Duration, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	env, auth := gitEnv(token)
-	s, err := out(ctx, dir, env, "git", m.gitArgs(token != "", args...)...)
+	s, err := run(ctx, dir, env, "git", m.gitArgs(remote, token != "", args...)...)
 	return redactAuth(s, err, auth)
 }
 
@@ -131,8 +202,10 @@ func (m *Manager) workspacePath(repository string) (string, error) {
 // with the push token in scope the next time this package runs git. Nothing
 // in the workspace's own config is ever trusted; this is called before any
 // host git command that runs after a container may have touched the
-// workspace. Refuses (rather than following) a .git that is not a real
-// directory, since a symlink there could point the rewrite anywhere.
+// workspace. It is the second layer behind hardeningArgs, which does not
+// depend on the file's contents at all. Refuses (rather than following) a
+// .git that is not a real directory, since a symlink there could point the
+// rewrite anywhere.
 func resetGitConfig(path, cloneURL string) error {
 	gitDir := filepath.Join(path, ".git")
 	info, err := os.Lstat(gitDir)
@@ -163,7 +236,10 @@ func resetGitConfig(path, cloneURL string) error {
 
 // checkout clones on first use, otherwise fetches, then puts the case branch
 // in place on top of the current default branch. A rebase conflict is left
-// as merge conflict markers for the agent.
+// as merge conflict markers for the agent. Every ref this reads is named by
+// its full path under refs/remotes/: the agent owns .git, so a branch called
+// "origin/main" under refs/heads would otherwise shadow the remote-tracking
+// ref that "origin/main" resolves to.
 func (m *Manager) checkout(ctx context.Context, repository, cloneURL, branch, defaultBranch, token string) (Workspace, error) {
 	path, err := m.workspacePath(repository)
 	if err != nil {
@@ -173,7 +249,8 @@ func (m *Manager) checkout(ctx context.Context, repository, cloneURL, branch, de
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return Workspace{}, err
 		}
-		if _, err := m.git(ctx, filepath.Dir(path), token, "clone", "--no-tags", "--branch", defaultBranch, cloneURL, path); err != nil {
+		if _, err := m.gitRemote(ctx, filepath.Dir(path), token, cloneURL, cloneTimeout,
+			"clone", "--no-tags", "--branch", defaultBranch, cloneURL, path); err != nil {
 			return Workspace{}, fmt.Errorf("clone %s: %w", repository, err)
 		}
 	} else {
@@ -182,19 +259,21 @@ func (m *Manager) checkout(ctx context.Context, repository, cloneURL, branch, de
 		if err := resetGitConfig(path, cloneURL); err != nil {
 			return Workspace{}, fmt.Errorf("reset git config for %s: %w", repository, err)
 		}
-		if _, err := m.git(ctx, path, token, "fetch", "--prune", "origin"); err != nil {
+		if _, err := m.gitRemote(ctx, path, token, cloneURL, gitTimeout,
+			"fetch", "--prune", cloneURL, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
 			return Workspace{}, fmt.Errorf("fetch %s: %w", repository, err)
 		}
-		_, _ = m.git(ctx, path, "", "rebase", "--abort")
-		_, _ = m.git(ctx, path, "", "merge", "--abort")
-		if _, err := m.git(ctx, path, "", "reset", "--hard"); err != nil {
+		_, _ = m.git(ctx, path, "rebase", "--abort")
+		_, _ = m.git(ctx, path, "merge", "--abort")
+		if _, err := m.git(ctx, path, "reset", "--hard"); err != nil {
 			return Workspace{}, err
 		}
-		if _, err := m.git(ctx, path, "", "clean", "-fdx"); err != nil {
+		if _, err := m.git(ctx, path, "clean", "-fdx"); err != nil {
 			return Workspace{}, err
 		}
 	}
-	baseOut, err := m.gitOut(ctx, path, "", "rev-parse", "origin/"+defaultBranch)
+	baseRef := "refs/remotes/origin/" + defaultBranch
+	baseOut, err := m.gitOut(ctx, path, "rev-parse", baseRef)
 	if err != nil {
 		return Workspace{}, fmt.Errorf("default branch %s: %w", defaultBranch, err)
 	}
@@ -202,33 +281,52 @@ func (m *Manager) checkout(ctx context.Context, repository, cloneURL, branch, de
 	if err != nil {
 		return Workspace{}, fmt.Errorf("default branch %s: %w", defaultBranch, err)
 	}
-	start := "origin/" + defaultBranch
-	if _, err := m.git(ctx, path, "", "rev-parse", "--verify", "--quiet", "origin/"+branch); err == nil {
-		start = "origin/" + branch
-	}
-	if _, err := m.git(ctx, path, "", "checkout", "-q", "-B", branch, start); err != nil {
-		return Workspace{}, err
-	}
-	if start != "origin/"+defaultBranch {
-		if _, err := m.git(ctx, path, "", "rebase", "origin/"+defaultBranch); err != nil {
-			m.logf("rebase %s onto %s conflicted; leaving markers for the agent", branch, defaultBranch)
-			_, _ = m.git(ctx, path, "", "rebase", "--abort")
-			_, _ = m.git(ctx, path, "", "merge", "--no-commit", "--no-ff", "origin/"+defaultBranch)
+	// The lease CommitAndPush pushes under is recorded here, from the fetch
+	// this call just did, and never re-read at push time: by then the agent
+	// has had a container on /work and could point
+	// refs/remotes/origin/<branch> at anything it liked.
+	branchRef := "refs/remotes/origin/" + branch
+	remoteHead := ""
+	if sha, err := m.gitOut(ctx, path, "rev-parse", "--verify", "--quiet", branchRef); err == nil {
+		if remoteHead, err = validateSha(sha); err != nil {
+			return Workspace{}, fmt.Errorf("remote head for %s: %w", branch, err)
 		}
 	}
-	return Workspace{Path: path, Repository: repository, CloneURL: cloneURL, Branch: branch, DefaultBranch: defaultBranch, BaseSha: base}, nil
+	start := baseRef
+	if remoteHead != "" {
+		start = branchRef
+	}
+	if _, err := m.git(ctx, path, "checkout", "-q", "-B", branch, start); err != nil {
+		return Workspace{}, err
+	}
+	if start != baseRef {
+		if _, err := m.git(ctx, path, "rebase", baseRef); err != nil {
+			m.logf("rebase %s onto %s conflicted; leaving markers for the agent", branch, defaultBranch)
+			_, _ = m.git(ctx, path, "rebase", "--abort")
+			_, _ = m.git(ctx, path, "merge", "--no-commit", "--no-ff", baseRef)
+		}
+	}
+	return Workspace{
+		Path:          path,
+		Repository:    repository,
+		CloneURL:      cloneURL,
+		Branch:        branch,
+		DefaultBranch: defaultBranch,
+		BaseSha:       base,
+		RemoteHead:    remoteHead,
+	}, nil
 }
 
 // CommitAndPush ends the agent phase, stages everything, commits when there
-// is anything to commit and pushes the branch with force-with-lease. The
-// first push of a fresh branch always happens so the branch exists
-// remotely.
+// is anything to commit and pushes the branch under the lease Prepare
+// recorded. The first push of a fresh branch carries an empty expected
+// value, which git enforces as "this ref must not exist yet".
 func (m *Manager) CommitAndPush(ctx context.Context, ws Workspace, token, message string) (string, bool, error) {
 	// The runner's own order is Start, the agent's turns, CommitAndPush,
 	// Teardown: this is the only point that can guarantee the container is
 	// gone before host git runs. Fails closed rather than trusting the
 	// workspace while the agent might still be rewriting .git/config.
-	if err := m.killAgentContainer(ctx, ws.Path); err != nil {
+	if err := m.endAgentPhase(ctx, ws); err != nil {
 		return "", false, err
 	}
 	// The container may have rewritten .git/config before it was removed;
@@ -236,15 +334,15 @@ func (m *Manager) CommitAndPush(ctx context.Context, ws Workspace, token, messag
 	if err := resetGitConfig(ws.Path, ws.CloneURL); err != nil {
 		return "", false, fmt.Errorf("reset git config for %s: %w", ws.Repository, err)
 	}
-	if _, err := m.git(ctx, ws.Path, "", "add", "-A"); err != nil {
+	if _, err := m.git(ctx, ws.Path, "add", "-A"); err != nil {
 		return "", false, err
 	}
-	if _, err := m.git(ctx, ws.Path, "", "diff", "--cached", "--quiet"); err != nil {
-		if _, err := m.git(ctx, ws.Path, "", "commit", "-q", "-m", message); err != nil {
+	if _, err := m.git(ctx, ws.Path, "diff", "--cached", "--quiet"); err != nil {
+		if _, err := m.git(ctx, ws.Path, "commit", "-q", "-m", message); err != nil {
 			return "", false, err
 		}
 	}
-	headOut, err := m.gitOut(ctx, ws.Path, "", "rev-parse", "HEAD")
+	headOut, err := m.gitOut(ctx, ws.Path, "rev-parse", "HEAD")
 	if err != nil {
 		return "", false, err
 	}
@@ -252,7 +350,9 @@ func (m *Manager) CommitAndPush(ctx context.Context, ws Workspace, token, messag
 	if err != nil {
 		return "", false, err
 	}
-	if _, err := m.git(ctx, ws.Path, token, "push", "--force-with-lease", "origin", "HEAD:refs/heads/"+ws.Branch); err != nil {
+	lease := "--force-with-lease=refs/heads/" + ws.Branch + ":" + ws.RemoteHead
+	if _, err := m.gitRemote(ctx, ws.Path, token, ws.CloneURL, gitTimeout,
+		"push", lease, ws.CloneURL, "HEAD:refs/heads/"+ws.Branch); err != nil {
 		return head, false, err
 	}
 	return head, true, nil
