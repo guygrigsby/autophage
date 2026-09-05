@@ -101,6 +101,18 @@ func LoadCase(s Snapshot) (*Case, error) {
 	return c, nil
 }
 
+// AssignID sets the store-generated id once, right after CreateCase.
+func (c *Case) AssignID(id string) error {
+	if id == "" {
+		return Invalid("id is empty")
+	}
+	if c.id != "" {
+		return Refused("id already assigned")
+	}
+	c.id = id
+	return nil
+}
+
 func (c *Case) ID() string                { return c.id }
 func (c *Case) Repository() string        { return c.repository }
 func (c *Case) Number() int               { return c.number }

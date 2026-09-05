@@ -97,3 +97,11 @@ func (s *Store) Truncate(ctx context.Context) error {
 		restart identity cascade`)
 	return err
 }
+
+// StoreDeliveryForTest inserts a minimal delivery row so facts that
+// reference a delivery can be exercised without the webhook path.
+func (s *Store) StoreDeliveryForTest(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx, `insert into webhook_deliveries (delivery_id, event, action, sender_login, payload)
+		values ($1, 'issues', 'labeled', 'guy', '{}'::bytea) on conflict do nothing`, id)
+	return err
+}

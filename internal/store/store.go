@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -60,4 +62,16 @@ func (s *Store) tx(ctx context.Context, fn func(pgx.Tx) error) error {
 func notify(ctx context.Context, tx pgx.Tx, payload string) error {
 	_, err := tx.Exec(ctx, "select pg_notify('autophage_events', $1)", payload)
 	return err
+}
+
+// toInterval converts a Duration to the wire form Postgres INTERVAL columns
+// take on insert: pgx does not encode time.Duration into INTERVAL directly.
+func toInterval(d time.Duration) pgtype.Interval {
+	return pgtype.Interval{Microseconds: d.Microseconds(), Valid: true}
+}
+
+// fromInterval converts a scanned INTERVAL back to a Duration. Intervals
+// stored here never carry days or months, but days is included for safety.
+func fromInterval(iv pgtype.Interval) time.Duration {
+	return time.Duration(iv.Microseconds)*time.Microsecond + time.Duration(iv.Days)*24*time.Hour
 }
