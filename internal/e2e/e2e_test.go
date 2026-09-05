@@ -245,7 +245,7 @@ func TestEndToEnd(t *testing.T) {
 	dispatcher := &app.Dispatcher{
 		Store:      st,
 		Translator: &github.Translator{Store: st, Clock: clock, ApprovedLabel: approvedLabel, BotLogin: "autophage[bot]"},
-		Triage:     &app.Triage{Store: st, Triager: runner.Triager(), GitHub: gh, Clock: clock},
+		Triage:     &app.Triage{Store: st, Triager: runner.Triager(), GitHub: gh, Clock: clock, Model: "scripted/triage"},
 		Scheduler:  &app.Scheduler{Store: st, Runner: runner, Concurrency: 1, Clock: clock, Budgets: app.BudgetPolicy{Auto: budget, Approved: budget}, GitHub: gh},
 		Commenter:  &app.Commenter{Store: st, GitHub: gh, Label: approvedLabel},
 		Enrollment: &app.Enrollment{Store: st, GitHub: gh, Label: approvedLabel},

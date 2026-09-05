@@ -95,7 +95,7 @@ func main() {
 	dispatcher := &app.Dispatcher{
 		Store:      st,
 		Translator: &github.Translator{Store: st, Clock: clock, ApprovedLabel: cfg.Label.Approved, BotLogin: cfg.GitHub.BotLogin},
-		Triage:     &app.Triage{Store: st, Triager: runner.Triager(), GitHub: gh, Clock: clock},
+		Triage:     &app.Triage{Store: st, Triager: runner.Triager(), GitHub: gh, Clock: clock, Model: cfg.Model.Triage.Model},
 		Scheduler:  scheduler,
 		Commenter:  &app.Commenter{Store: st, GitHub: gh, Label: cfg.Label.Approved},
 		Enrollment: &app.Enrollment{Store: st, GitHub: gh, Label: cfg.Label.Approved},
