@@ -8,9 +8,10 @@ Each step names who runs it. **operator**: needs a browser, a sudo password,
 or is otherwise not safely scriptable. **ssh**: driven from the Mac over ssh
 once trig has a working checkout.
 
-Nothing past step 1 works until step 1 is done: trig clones autophage from
-GitHub, and the build needs real tags for `jess` and `llm` instead of the
-`replace` directives in `go.mod`.
+Nothing that clones from GitHub works until step 1 is done: trig clones
+autophage (and jess) from GitHub, and the build needs real tags for `jess`
+and `llm` instead of the `replace` directives in `go.mod`. Step 2 (Postgres)
+does not depend on step 1 and can run first or in parallel.
 
 ## 1. Release prerequisites (operator)
 
@@ -19,14 +20,19 @@ at sibling checkouts in `gyr` and `autophage`.
 
 ```bash
 cd <path to llm checkout>
-git tag v0.4.0
-git push --follow-tags
+git tag -a v0.4.0 -m "openrouter adapter"
+git push
+git push origin v0.4.0
 ```
+
+llm already has a local annotated `v0.4.0` tag. If `git tag -a` fails with
+"tag already exists", that is fine, skip straight to the two pushes above.
 
 ```bash
 cd <path to jess checkout>
-git tag v0.1.0
-git push --follow-tags
+git tag -a v0.1.0 -m "mcp adapter, ReleaseAgent"
+git push
+git push origin v0.1.0
 ```
 
 ```bash
@@ -66,14 +72,12 @@ points at the socket directly: `postgres:///autophage?host=/var/run/postgresql`.
 
 ```bash
 git clone git@github.com:guygrigsby/autophage.git ~/projects/autophage
+git clone git@github.com:guygrigsby/jess.git ~/projects/jess
+git -C ~/projects/jess checkout v0.1.0
 cd ~/projects/autophage
 make image
 make image-test
 ```
-
-`make image` also needs a `jess` sibling checkout next to `autophage/` on
-trig, same as local builds (see the README's Building section), until the
-Containerfile drops that `COPY jess /jess` line.
 
 ## 4. GitHub App (operator, browser)
 
@@ -87,7 +91,7 @@ Register at `github.com/settings/apps/new`, named `autophage`:
 Download the private key, then move it onto trig:
 
 ```bash
-scp <downloaded App key>.pem trig:~/.config/autophage/app.pem
+scp <downloaded App key.pem> trig:~/.config/autophage/app.pem
 ssh trig chmod 0600 ~/.config/autophage/app.pem
 ```
 
@@ -167,6 +171,14 @@ small typo fix.
 **Verify:**
 
 ```bash
+ssh trig 'cd ~/projects/autophage && ./autophage auth login'
+```
+
+The mint endpoint only accepts loopback requests, so login has to run from a
+shell on trig itself, over this ssh session, not from the Mac's own CLI and
+not through Funnel.
+
+```bash
 ssh trig 'cd ~/projects/autophage && ./autophage cases'
 ```
 
@@ -192,7 +204,7 @@ scrape target in bee's Prometheus config (**operator**, edit on bee).
 ## Rollback
 
 ```bash
-ssh trig systemctl --user stop autophaged
+ssh trig systemctl --user stop autophaged.service
 ssh trig tailscale funnel reset
 ```
 
