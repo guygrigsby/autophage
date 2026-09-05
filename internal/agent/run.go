@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/guygrigsby/jess"
 	"github.com/guygrigsby/jess/ledger"
@@ -138,6 +139,11 @@ func RunAttempt(ctx context.Context, in RunInput) RunReport {
 	}
 	sum := wait()
 	mainRunEnded.Store(true)
+	// Stopped here, beside the flag the turn steer reads: the summary turn
+	// reuses this agent, and a wrap-up steer landing in its queue would tell
+	// the model to stop and commit in the one turn whose only job is to
+	// answer with the summary.
+	wallTimer.Stop()
 
 	stop := flag.get()
 	if sum != nil {
@@ -185,7 +191,7 @@ func RunAttempt(ctx context.Context, in RunInput) RunReport {
 	// constrain it.
 	skipSummaryTurn := stop == StopModelErr || (stop == StopCancelled && ctx.Err() != nil)
 	summaryTurns := 0
-	if !strings.Contains(last, "What I found:") && !skipSummaryTurn {
+	if !hasSummaryShape(last) && !skipSummaryTurn {
 		agent.SetTools()
 		agent.ClearAllQueues()
 		sumCtx, sumCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
@@ -200,7 +206,7 @@ func RunAttempt(ctx context.Context, in RunInput) RunReport {
 		}
 		sumCancel()
 	}
-	if !strings.Contains(last, "What I found:") {
+	if !hasSummaryShape(last) {
 		if last == "" {
 			last = "The agent produced no summary."
 		} else {
@@ -222,10 +228,51 @@ func RunAttempt(ctx context.Context, in RunInput) RunReport {
 	return RunReport{
 		RunID:   capture.RunID(),
 		Usage:   resolution.Usage{Turns: turnCount, InputTokens: usage.Input + usage.CacheRead, OutputTokens: usage.Output, WallClock: clock.Now().Sub(started), DiffLines: lines},
-		Summary: last,
+		Summary: truncateSummary(last),
 		Stop:    stop,
 		Err:     reportErr,
 	}
+}
+
+// maxSummaryRunes bounds the summary a run reports. Nothing upstream bounds
+// what a model writes, and the summary is stored on the outcome, posted as
+// an issue comment and quoted back into the next attempt's brief: a model
+// that answered with a whole file would carry that cost three times over.
+// GitHub refuses a comment body over 65536 characters outright, which turns
+// an oversized summary into an outcome nobody ever reads.
+const maxSummaryRunes = 20000
+
+// truncateSummary cuts the summary to maxSummaryRunes runes, saying so when
+// it cut. Runes, not bytes, so the cut never lands inside a character.
+func truncateSummary(s string) string {
+	if utf8.RuneCountInString(s) <= maxSummaryRunes {
+		return s
+	}
+	return string([]rune(s)[:maxSummaryRunes]) + "\n\n[summary truncated]"
+}
+
+// summaryHead is the first line of the required shape, stripped to what a
+// heading has to carry however the model decorates it.
+var summaryHead = normaliseHeading(strings.SplitN(resolution.SummaryShape, "\n", 2)[0])
+
+// hasSummaryShape reports whether text opens a line with the first heading
+// of the required shape. Models routinely bold or hash a heading
+// ("**What I found:**", "## What I found:"), which is the shape that was
+// asked for; reading it as a miss cost a whole forced summary turn, and on
+// a budget stop that turn is the last one there is.
+func hasSummaryShape(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(normaliseHeading(line), summaryHead) {
+			return true
+		}
+	}
+	return false
+}
+
+// normaliseHeading lowercases a line and strips the markdown decoration and
+// whitespace around it.
+func normaliseHeading(s string) string {
+	return strings.ToLower(strings.Trim(s, " \t\r*#"))
 }
 
 var _ ledger.DurableSink = (*captureRun)(nil)

@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/guygrigsby/jess"
 	"github.com/guygrigsby/jess/ledger"
@@ -189,5 +190,44 @@ func TestRunModelError(t *testing.T) {
 	rep := RunAttempt(t.Context(), in)
 	if rep.Stop != StopModelErr || rep.Err == nil {
 		t.Errorf("report = %+v", rep)
+	}
+}
+
+// A model that decorates the required heading has still answered in the
+// shape asked for. Reading "**What I found:**" as a miss spent a whole
+// forced summary turn, which on a budget stop is the last turn there is.
+func TestRunAcceptsADecoratedSummaryHeading(t *testing.T) {
+	const bold = "**What I found:** a typo.\n**What I did:** fixed it.\n**What is left:** nothing.\n**What I would do with more budget:** nothing."
+	var calls atomic.Int32
+	model := jess.Once(true, func(_ context.Context, _ []ac.Message, _ []ac.ToolSpec) (*ac.LLMResponse, error) {
+		calls.Add(1)
+		return &ac.LLMResponse{Message: ac.Message{Role: ac.RoleAssistant, Content: []ac.ContentBlock{ac.TextBlock(bold)}, StopReason: ac.StopReasonStop}}, nil
+	})
+	in, _ := input(t, model, &echoTool{}, 10, time.Minute, 100, nil)
+	rep := RunAttempt(t.Context(), in)
+	if rep.Stop != StopNone || rep.Summary != bold {
+		t.Fatalf("report = %+v", rep)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("model called %d times, want 1: the decorated heading cost a forced summary turn", got)
+	}
+}
+
+// The summary is stored, commented and quoted back into the next attempt's
+// brief, so a model that answers with a whole file is cut down to size.
+func TestRunTruncatesAnOversizedSummary(t *testing.T) {
+	huge := goodSummary + "\n" + strings.Repeat("é", 2*maxSummaryRunes)
+	in, _ := input(t, scripted(0, huge, nil), &echoTool{}, 10, time.Minute, 100, nil)
+	rep := RunAttempt(t.Context(), in)
+	if n := utf8.RuneCountInString(rep.Summary); n != maxSummaryRunes+len([]rune("\n\n[summary truncated]")) {
+		t.Fatalf("summary is %d runes, want the cut at %d plus the note", n, maxSummaryRunes)
+	}
+	if !strings.HasSuffix(rep.Summary, "\n\n[summary truncated]") || !strings.HasPrefix(rep.Summary, "What I found") {
+		t.Errorf("summary = %q...%q", rep.Summary[:40], rep.Summary[len(rep.Summary)-40:])
+	}
+	// A summary that fits is left exactly as the model wrote it.
+	in, _ = input(t, scripted(0, goodSummary, nil), &echoTool{}, 10, time.Minute, 100, nil)
+	if rep := RunAttempt(t.Context(), in); rep.Summary != goodSummary {
+		t.Errorf("a summary inside the bound was rewritten: %q", rep.Summary)
 	}
 }
