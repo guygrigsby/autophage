@@ -165,11 +165,14 @@ func (r *Runner) reason(slot *running, fallback resolution.AbortReason) resoluti
 }
 
 // shuttingDown reports the daemon going down under a running attempt: the
-// caller's context is done and nobody asked for this attempt to stop. It is
+// caller's context was done and nobody asked for this attempt to stop. It is
 // the one end that records no outcome, because an outcome here would spend
 // the case's answer on a cancellation nothing about the attempt earned.
-func (r *Runner) shuttingDown(caller context.Context, slot *running) bool {
-	return caller.Err() != nil && r.reason(slot, "") == ""
+// callerDone is a snapshot the caller reads once rather than a live check: a
+// cancellation arriving after the attempt has already finished its work is
+// not what this decides.
+func (r *Runner) shuttingDown(callerDone bool, slot *running) bool {
+	return callerDone && r.reason(slot, "") == ""
 }
 
 // Run executes one attempt end to end. It records an outcome for every end
@@ -324,45 +327,53 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 		summary = "The agent produced no summary."
 	}
 
+	// Read once, before the work below: a shutdown that arrives while the
+	// push is running must not change an answer for an attempt that has
+	// already finished everything it was going to do.
+	callerDone := caller.Err() != nil
+
 	// Mint again for the push. An installation token lives an hour at most
 	// (github.Client.MintToken) and an approved attempt's wall clock is
 	// three, so the token Prepare used would 401 at exactly the moment
-	// there is work to save. Both the mint and the push run detached from
-	// the attempt's context, whatever ended the run: a stop or a model
-	// failure still leaves commits worth keeping, and CommitAndPush is what
-	// ends the agent phase on the workspace.
+	// there is work to save. A failed mint does not skip the push: the
+	// commit leg runs either way, and the token already in hand is often
+	// still good. Both the mint and the push run detached from the
+	// attempt's context, whatever ended the run: a stop or a model failure
+	// still leaves commits worth keeping, and CommitAndPush is what ends
+	// the agent phase on the workspace.
 	pushCtx := context.WithoutCancel(ctx)
 	mintCtx, cancelMint := context.WithTimeout(pushCtx, githubTimeout)
-	pushToken, mintErr := r.GitHub.MintToken(mintCtx, repo)
+	fresh, mintErr := r.GitHub.MintToken(mintCtx, repo)
 	cancelMint()
-	var head string
-	var pushed bool
-	var pushErr error
-	if mintErr == nil {
-		head, pushed, pushErr = r.Sandbox.CommitAndPush(pushCtx, ws, pushToken.Value, fmt.Sprintf("autophage: attempt %d", a.Ordinal))
-	}
-	switch {
-	case mintErr != nil:
+	pushToken := token
+	if mintErr != nil {
 		r.logf("runner %s: mint push token: %v", a.ID, mintErr)
-	case pushErr != nil:
+	} else {
+		pushToken = fresh
+	}
+	head, pushed, pushErr := r.Sandbox.CommitAndPush(pushCtx, ws, pushToken.Value, fmt.Sprintf("autophage: attempt %d", a.Ordinal))
+	if pushErr != nil {
 		r.logf("runner %s: commit and push: %v", a.ID, pushErr)
 	}
 
-	if r.shuttingDown(caller, slot) {
+	if r.shuttingDown(callerDone, slot) {
 		return resolution.Outcome{}, errShutdown
 	}
 	// A branch that did not reach the remote is an infrastructure failure
 	// whatever ended the run: the work exists on host disk only, and a
 	// budget or abort outcome would send the operator to a branch that is
-	// not there. The agent's summary rides along as detail, since it is the
-	// only account of what the attempt did.
-	switch {
-	case mintErr != nil:
-		return failed(resolution.FailureInfra, "mint push token: "+mintErr.Error()+"\n\n"+summary, report.Usage), nil
-	case pushErr != nil:
-		return failed(resolution.FailureInfra, "push: "+pushErr.Error()+"\n\n"+summary, report.Usage), nil
-	case !pushed:
-		return failed(resolution.FailureInfra, "push: the branch did not reach the remote\n\n"+summary, report.Usage), nil
+	// not there. A re-mint that failed is named here too, since it is the
+	// likely reason the push was refused. The agent's summary rides along
+	// as detail, since it is the only account of what the attempt did.
+	if pushErr != nil || !pushed {
+		why := "the branch did not reach the remote"
+		if pushErr != nil {
+			why = pushErr.Error()
+		}
+		if mintErr != nil {
+			why += " (the push token could not be re-minted: " + mintErr.Error() + ")"
+		}
+		return failed(resolution.FailureInfra, "push: "+why+"\n\n"+summary, report.Usage), nil
 	}
 
 	switch report.Stop {

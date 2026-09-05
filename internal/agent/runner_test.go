@@ -149,6 +149,9 @@ type fakeGitHub struct {
 	issue  resolution.IssueDetail
 	branch string // DefaultBranch answer; empty means the enrolled one
 	prErr  error
+	// remintErr, when set, fails every mint after the first, so a test can
+	// drive the push that has to fall back to the token already in hand.
+	remintErr error
 }
 
 func (g *fakeGitHub) GetIssue(context.Context, string, int) (resolution.IssueDetail, error) {
@@ -167,6 +170,9 @@ func (g *fakeGitHub) DefaultBranch(_ context.Context, repo resolution.Repository
 func (g *fakeGitHub) MintToken(context.Context, resolution.Repository) (resolution.Token, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.remintErr != nil && len(g.minted) > 0 {
+		return resolution.Token{}, g.remintErr
+	}
 	value := fmt.Sprintf("tok-%d", len(g.minted)+1)
 	g.minted = append(g.minted, value)
 	return resolution.Token{Value: value, ExpiresAt: t0.Add(time.Hour)}, nil
@@ -519,6 +525,45 @@ func TestRunnerUnpushedBranchIsInfra(t *testing.T) {
 	}
 	if !strings.Contains(o.Message, "did not reach the remote") || !strings.Contains(o.Message, "What I found") {
 		t.Errorf("message = %q", o.Message)
+	}
+}
+
+// A re-mint that fails must not skip the push. The commit leg runs either
+// way, and the token already in hand is often still good, so the work
+// reaches the branch whenever it is.
+func TestRunnerPushesWithTheTokenInHandWhenTheReMintFails(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		failPush  error
+		wantState resolution.CaseState
+		wantKind  resolution.OutcomeKind
+	}{
+		{name: "the token in hand still works", wantState: resolution.Done, wantKind: resolution.PullRequestOpened},
+		{name: "the token in hand is spent too", failPush: errors.New("git: 401 unauthorized"), wantState: resolution.Failed, wantKind: resolution.FailedOutcome},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := storetest.Open(t)
+			id := startedAttempt(t, st, resolution.Auto)
+			sb := &fakeSandbox{commits: true, failPush: tc.failPush}
+			gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}, remintErr: errors.New("github: 500 minting")}
+			r, _, logs := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+			r.Run(t.Context(), id)
+			if len(sb.pushTokens) != 1 || sb.pushTokens[0] != "tok-1" {
+				t.Errorf("pushed with %q, want the token already in hand", sb.pushTokens)
+			}
+			c, err := st.GetCase(t.Context(), "guy/repo", 7)
+			if err != nil {
+				t.Fatal(err)
+			}
+			o := c.Attempts()[0].Outcome
+			if c.State() != tc.wantState || o == nil || o.Kind != tc.wantKind {
+				t.Fatalf("state %s outcome %+v", c.State(), o)
+			}
+			if tc.failPush != nil && (o.Class != resolution.FailureInfra || !strings.Contains(o.Message, "401 unauthorized") || !strings.Contains(o.Message, "500 minting")) {
+				t.Errorf("the push and the re-mint were not both reported: %+v", o)
+			}
+			assertNoTokenLogged(t, logs, gh)
+		})
 	}
 }
 
