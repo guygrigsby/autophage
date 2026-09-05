@@ -358,6 +358,60 @@ func (m *Manager) CommitAndPush(ctx context.Context, ws Workspace, token, messag
 	return head, true, nil
 }
 
+// conflictOpen and conflictClose are the two markers a merge writes around a
+// hunk it could not resolve. A run of equals signs is the third marker git
+// writes, but it is also how markdown underlines a heading, so it is not on
+// its own evidence of anything: a branch counts as conflicted only when the
+// commits added both an opening and a closing marker.
+const (
+	conflictOpen  = "<<<<<<< "
+	conflictClose = ">>>>>>> "
+)
+
+// ConflictMarkers reports whether the commits this branch adds on top of its
+// base left merge conflict markers in the tree. checkout leaves them there
+// deliberately when the rebase onto the default branch conflicts, so
+// resolving them is the agent's first job; an agent that instead committed
+// them would otherwise reach a pull request.
+//
+// Valid only after CommitAndPush, which is what removes the agent's
+// container and commits the working tree: called any earlier this either
+// races the container over .git or reads a HEAD the agent's work has not
+// reached yet. Runs through the same hardened local-git path as every other
+// host command, so a rewritten .git/config cannot turn the scan into an exec
+// surface.
+func (m *Manager) ConflictMarkers(ctx context.Context, ws Workspace) (bool, error) {
+	base, err := validateSha(ws.BaseSha)
+	if err != nil {
+		return false, fmt.Errorf("conflict markers for %s: %w", ws.Repository, err)
+	}
+	// Added and modified files only, with no context lines: every line the
+	// scan sees is one the branch itself wrote, so a marker that was already
+	// on the default branch is not this attempt's doing.
+	diff, err := m.gitOut(ctx, ws.Path, "diff", base+"..HEAD", "--diff-filter=AM", "--unified=0")
+	if err != nil {
+		return false, fmt.Errorf("conflict markers for %s: %w", ws.Repository, err)
+	}
+	var opened, closed bool
+	for _, line := range strings.Split(diff, "\n") {
+		// Added lines only. "+++" is the file header, not content.
+		if !strings.HasPrefix(line, "+") || strings.HasPrefix(line, "+++") {
+			continue
+		}
+		added := line[1:]
+		if strings.HasPrefix(added, conflictOpen) {
+			opened = true
+		}
+		if strings.HasPrefix(added, conflictClose) {
+			closed = true
+		}
+		if opened && closed {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (m *Manager) logf(format string, args ...any) {
 	if m.Logf != nil {
 		m.Logf(format, args...)

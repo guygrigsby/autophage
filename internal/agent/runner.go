@@ -439,6 +439,21 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 		return failed(resolution.FailureAgent, summary, report.Usage), nil
 	}
 
+	// The rebase onto the default branch may have left conflict markers in
+	// the tree for the agent to resolve, and CommitAndPush stages everything
+	// it finds: an agent that never resolved them has just pushed them. Only
+	// on the path that would open a pull request, and only after
+	// CommitAndPush, which is what removed the container and made the
+	// commits this reads. A check that cannot run is logged and the pull
+	// request is opened anyway: the guard sits on top of the agent's own job
+	// and a human reads the pull request, so a host git that failed here is
+	// not worth spending the attempt's outcome on.
+	if marked, err := r.Sandbox.ConflictMarkers(pushCtx, ws); err != nil {
+		r.logf("runner %s: conflict markers: %v", a.ID, err)
+	} else if marked {
+		return failed(resolution.FailureAgent, "left unresolved conflict markers on the branch\n\n"+summary, report.Usage), nil
+	}
+
 	ghCtx, cancelGH := context.WithTimeout(pushCtx, githubTimeout)
 	defer cancelGH()
 	title := fmt.Sprintf("autophage: issue #%d", c.Number())

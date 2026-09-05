@@ -181,6 +181,63 @@ func TestPrepareLeavesConflictMarkersOnRebaseConflict(t *testing.T) {
 	}
 }
 
+// TestConflictMarkersSeesWhatTheBranchCommitted proves the guard the runner
+// puts in front of OpenPullRequest: a clean branch reports nothing, and a
+// branch whose commits carry the markers the conflicted rebase left reports
+// them, after CommitAndPush and against the base the branch is on.
+func TestConflictMarkersSeesWhatTheBranchCommitted(t *testing.T) {
+	m := manager(t)
+	bare := origin(t)
+	ctx := t.Context()
+	ws, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "README.md"), []byte("# ours\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, pushed, err := m.CommitAndPush(ctx, ws, "tok", "ours"); err != nil || !pushed {
+		t.Fatalf("push: %v %v", pushed, err)
+	}
+	marked, err := m.ConflictMarkers(ctx, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if marked {
+		t.Error("a clean branch reported conflict markers")
+	}
+	if err := m.Teardown(ctx, Container{Workspace: ws}); err != nil {
+		t.Fatal(err)
+	}
+
+	// main moves the same line, so the resumed attempt's rebase conflicts
+	// and checkout leaves the markers in the tree for the agent. This agent
+	// commits them instead of resolving them.
+	other := filepath.Join(t.TempDir(), "other")
+	git(t, filepath.Dir(other), "clone", "-q", bare, other)
+	if err := os.WriteFile(filepath.Join(other, "README.md"), []byte("# theirs\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, other, "commit", "-q", "-am", "theirs")
+	git(t, other, "push", "-q", "origin", "main")
+
+	ws2, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, pushed, err := m.CommitAndPush(ctx, ws2, "tok", "autophage: attempt 2"); err != nil || !pushed {
+		t.Fatalf("push the conflicted tree: %v %v", pushed, err)
+	}
+	marked, err = m.ConflictMarkers(ctx, ws2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !marked {
+		b, _ := os.ReadFile(filepath.Join(ws2.Path, "README.md"))
+		t.Errorf("committed conflict markers went unreported:\n%s", b)
+	}
+}
+
 // TestCommitAndPushIgnoresHostileGitConfig proves the critical fix: /work is
 // bind-mounted whole, so a compromised agent container can rewrite
 // .git/config (remote.origin.url, a credential helper, an sshCommand, an

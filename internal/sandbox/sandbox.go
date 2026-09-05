@@ -68,12 +68,18 @@ type Container struct {
 // DiffLines is advisory. It runs inside the container, where the agent owns
 // .git and can make the count say whatever it likes; the enforced budget
 // legs are turns and wall clock, which the daemon counts itself.
+//
+// ConflictMarkers is valid only after CommitAndPush, and only then: it runs
+// host git against the workspace, which is safe only once CommitAndPush has
+// confirmed the agent's container is gone, and it reads the commits that
+// same call made.
 type Sandbox interface {
 	Prepare(ctx context.Context, repository, cloneURL, branch, defaultBranch, token string) (Workspace, error)
 	Start(ctx context.Context, ws Workspace, attemptID string) (Container, error)
 	Tools(ctx context.Context, c Container) ([]ac.Tool, io.Closer, error)
 	DiffLines(ctx context.Context, c Container, baseSha string) (int, error)
 	CommitAndPush(ctx context.Context, ws Workspace, token, message string) (headSha string, pushed bool, err error)
+	ConflictMarkers(ctx context.Context, ws Workspace) (bool, error)
 	Teardown(ctx context.Context, c Container) error
 }
 

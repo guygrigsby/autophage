@@ -55,6 +55,10 @@ type fakeSandbox struct {
 	// ending and the runner deciding what its outcome is.
 	onDiff func()
 	diff   int
+	// conflicted is what ConflictMarkers answers, and conflictErr the error
+	// it fails with instead.
+	conflicted  bool
+	conflictErr error
 }
 
 func (f *fakeSandbox) record(call string) {
@@ -133,6 +137,15 @@ func (f *fakeSandbox) CommitAndPush(_ context.Context, ws sandbox.Workspace, tok
 		head = headSha
 	}
 	return head, !f.noPush, nil
+}
+
+// ConflictMarkers is valid only after CommitAndPush, so it records itself
+// like every other call and the test asserts that order.
+func (f *fakeSandbox) ConflictMarkers(context.Context, sandbox.Workspace) (bool, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, "conflicts")
+	f.mu.Unlock()
+	return f.conflicted, f.conflictErr
 }
 
 func (f *fakeSandbox) Teardown(_ context.Context, c sandbox.Container) error {
@@ -876,5 +889,60 @@ func TestTriagerReportsAModelItCannotBuild(t *testing.T) {
 	r := &Runner{TriageModel: "some/model"}
 	if _, err := r.Triager().Classify(t.Context(), "t", "b"); err == nil {
 		t.Error("a runner with no OpenRouter key built a triager that answers")
+	}
+}
+
+// Conflict markers on the branch are the agent's failure, not a pull
+// request: the rebase left them for it to resolve and it committed them
+// instead. The branch is still pushed, so the resumed attempt starts from
+// them.
+func TestRunnerConflictMarkersOpenNoPullRequest(t *testing.T) {
+	st := storetest.Open(t)
+	id := startedAttempt(t, st, resolution.Auto)
+	sb := &fakeSandbox{commits: true, conflicted: true}
+	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
+	r, _, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+	r.Run(t.Context(), id)
+	c, err := st.GetCase(t.Context(), "guy/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Attempts()[0].Outcome
+	if c.State() != resolution.Failed || o == nil || o.Kind != resolution.FailedOutcome || o.Class != resolution.FailureAgent {
+		t.Fatalf("state %s outcome %+v", c.State(), o)
+	}
+	if !strings.Contains(o.Message, "unresolved conflict markers") || !strings.Contains(o.Message, "What I found") {
+		t.Errorf("message = %q", o.Message)
+	}
+	if len(gh.pullRequests()) != 0 {
+		t.Errorf("a pull request was opened from a branch with conflict markers: %v", gh.pullRequests())
+	}
+	if len(sb.pushed) != 1 {
+		t.Errorf("the work did not reach the branch: %v", sb.pushed)
+	}
+	// The check is only valid once CommitAndPush has removed the container
+	// and made the commits it reads.
+	calls := sb.order()
+	if index(t, calls, "conflicts") < index(t, calls, "push") {
+		t.Errorf("conflict markers were checked before the push: %v", calls)
+	}
+}
+
+// A check that cannot run must not cost the attempt its outcome: the guard
+// sits on top of the agent's own job and a human reads the pull request.
+func TestRunnerConflictMarkerCheckFailureStillOpensThePullRequest(t *testing.T) {
+	st := storetest.Open(t)
+	id := startedAttempt(t, st, resolution.Auto)
+	sb := &fakeSandbox{commits: true, conflictErr: errors.New("git: bad object")}
+	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
+	r, _, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+	r.Run(t.Context(), id)
+	c, err := st.GetCase(t.Context(), "guy/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Attempts()[0].Outcome
+	if c.State() != resolution.Done || o == nil || o.Kind != resolution.PullRequestOpened {
+		t.Fatalf("state %s outcome %+v", c.State(), o)
 	}
 }
