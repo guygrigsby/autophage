@@ -3,23 +3,39 @@ package app
 import (
 	"context"
 	"log"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/guygrigsby/autophage/internal/github"
 	"github.com/guygrigsby/autophage/internal/store"
 )
 
+// defaultFloor is how long the dispatcher will go without a sweep. Every
+// service logs "will retry" when GitHub refuses it, and a store
+// notification is the only other thing that wakes one: a failure that
+// writes nothing to the store would otherwise wait for an unrelated change
+// to arrive, which on a quiet repository is for ever.
+const defaultFloor = 60 * time.Second
+
+// shutdownWait bounds how long Run will hold the daemon open for runners
+// that have not returned.
+const shutdownWait = 30 * time.Second
+
 // Dispatcher runs recovery once, sweeps every service, then sweeps again on
-// every store notification. Sweeps never overlap; wake-ups that arrive
-// during a sweep coalesce into one more.
+// every store notification and at least once per Floor. Sweeps never
+// overlap; wake-ups that arrive during a sweep coalesce into one more.
 type Dispatcher struct {
 	Store      *store.Store
 	Translator *github.Translator
 	Triage     *Triage
 	Scheduler  *Scheduler
 	Commenter  *Commenter
-	Labels     *LabelSetup
+	Enrollment *Enrollment
 	Recovery   *Recovery
+	// Floor is the cadence that makes every "will retry" true. Zero means
+	// defaultFloor.
+	Floor time.Duration
 
 	mu   sync.Mutex
 	wake chan struct{}
@@ -56,6 +72,26 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 		return nil
 	}
 
+	floor := d.Floor
+	if floor <= 0 {
+		floor = defaultFloor
+	}
+	ticker := time.NewTicker(floor)
+	defer ticker.Stop()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				select {
+				case d.wake <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}()
+
 	if err := d.Recovery.Run(ctx); err != nil {
 		return err
 	}
@@ -63,7 +99,9 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			d.Scheduler.Wait()
+			if !d.Scheduler.WaitTimeout(shutdownWait) {
+				log.Printf("shutdown: gave up after %s on running attempts: %s", shutdownWait, strings.Join(d.Scheduler.Running(), ", "))
+			}
 			return nil
 		case <-d.wake:
 			d.Sweep(ctx)
@@ -81,7 +119,7 @@ func (d *Dispatcher) Sweep(ctx context.Context) {
 		run  func(context.Context) error
 	}{
 		{"translate", d.Translator.ProcessPending},
-		{"labels", d.Labels.Run},
+		{"enroll", d.Enrollment.Run},
 		{"triage", d.Triage.Run},
 		{"comment", d.Commenter.Run},
 		{"schedule", d.Scheduler.Run},

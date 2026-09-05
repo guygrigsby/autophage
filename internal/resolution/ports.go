@@ -31,6 +31,11 @@ type GitHub interface {
 	// GitHub; every other failure (network, auth, rate limit) is returned
 	// unwrapped.
 	GetIssue(ctx context.Context, repository string, number int) (IssueDetail, error)
+	// DefaultBranch reads the branch attempts rebase onto and pull requests
+	// target. The installation payloads that enroll a repository do not
+	// carry it, so what enrollment stored is a placeholder until this
+	// corrects it.
+	DefaultBranch(ctx context.Context, repo Repository) (string, error)
 	MintToken(ctx context.Context, repo Repository) (Token, error)
 	PostComment(ctx context.Context, repository string, number int, body string) (commentID int64, err error)
 	OpenPullRequest(ctx context.Context, repository, head, base, title, body string) (prNumber int, err error)

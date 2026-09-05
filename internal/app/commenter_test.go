@@ -22,14 +22,14 @@ func TestCommenterPostsTriageAndOutcomeOnceEach(t *testing.T) {
 	if err := cm.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(gh.comments) != 0 {
+	if len(gh.postedComments()) != 0 {
 		t.Fatal("posted despite failure")
 	}
-	gh.failPost = false
+	gh.setFailPost(false)
 	_ = cm.Run(ctx)
 	_ = cm.Run(ctx)
-	if len(gh.comments) != 1 || !strings.Contains(gh.comments[0], "touches the auth layer") || !strings.Contains(gh.comments[0], "approved") {
-		t.Errorf("comments = %q", gh.comments)
+	if posted := gh.postedComments(); len(posted) != 1 || !strings.Contains(posted[0], "touches the auth layer") || !strings.Contains(posted[0], "approved") {
+		t.Errorf("comments = %q", posted)
 	}
 
 	b, _ := resolution.NewBudget(10, 3600e9, 500)
@@ -53,7 +53,7 @@ func TestCommenterPostsTriageAndOutcomeOnceEach(t *testing.T) {
 	}
 	_ = cm.Run(ctx)
 	_ = cm.Run(ctx)
-	if len(gh.comments) != 2 || !strings.Contains(gh.comments[1], "What I found: a lot.") || !strings.Contains(gh.comments[1], "turns") {
-		t.Errorf("comments = %q", gh.comments)
+	if posted := gh.postedComments(); len(posted) != 2 || !strings.Contains(posted[1], "What I found: a lot.") || !strings.Contains(posted[1], "turns") {
+		t.Errorf("comments = %q", posted)
 	}
 }

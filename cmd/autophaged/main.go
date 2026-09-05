@@ -83,7 +83,7 @@ func main() {
 		Triage:     &app.Triage{Store: st, Triager: runner.Triager(), GitHub: gh, Clock: clock},
 		Scheduler:  &app.Scheduler{Store: st, Runner: runner, Concurrency: cfg.Sandbox.Concurrency, Clock: clock, Budgets: app.BudgetPolicy{Auto: autoBudget, Approved: approvedBudget}, GitHub: gh},
 		Commenter:  &app.Commenter{Store: st, GitHub: gh, Label: cfg.Label.Approved},
-		Labels:     &app.LabelSetup{Store: st, GitHub: gh, Label: cfg.Label.Approved},
+		Enrollment: &app.Enrollment{Store: st, GitHub: gh, Label: cfg.Label.Approved},
 		Recovery:   &app.Recovery{Store: st, Clock: clock},
 	}
 

@@ -102,6 +102,90 @@ func TestSchedulerStartsInOrderWithinConcurrency(t *testing.T) {
 	s.Wait()
 }
 
+// silentRunner returns without recording anything, the way a runner with an
+// early return on some path would.
+type silentRunner struct{ done chan struct{} }
+
+func (s silentRunner) Run(context.Context, string) { close(s.done) }
+
+// panickingRunner is the other half of the same hole.
+type panickingRunner struct{ done chan struct{} }
+
+func (p panickingRunner) Run(context.Context, string) {
+	close(p.done)
+	panic("nil map write in the sandbox")
+}
+
+// waitForOutcome polls until the case's first attempt has an outcome.
+func waitForOutcome(t *testing.T, s *Scheduler) *resolution.Outcome {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := s.Store.GetCase(t.Context(), "guy/repo", 1)
+		if err == nil && len(c.Attempts()) == 1 && c.Attempts()[0].Outcome != nil {
+			return c.Attempts()[0].Outcome
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("attempt never got an outcome")
+	return nil
+}
+
+// TestSchedulerBackstopsAPanickingRunner proves a runner panic does not take
+// the daemon with it and does not strand the case in Attempting. Nothing
+// else ends an attempt while the daemon is up, so without the backstop the
+// case would sit there until the next restart's boot scan.
+func TestSchedulerBackstopsAPanickingRunner(t *testing.T) {
+	st := storetest.Open(t)
+	queueCases(t, st, 1)
+	gh := &fakeGitHub{issues: map[string]resolution.IssueDetail{keyOf("guy/repo", 1): issue(true)}}
+	runner := panickingRunner{done: make(chan struct{})}
+	s := &Scheduler{Store: st, Runner: runner, Concurrency: 1, Clock: fixedClock{t0}, Budgets: policy(t), GitHub: gh}
+	if err := s.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	<-runner.done
+	if !s.WaitTimeout(5 * time.Second) {
+		t.Fatal("runner goroutine never returned")
+	}
+	o := waitForOutcome(t, s)
+	if o.Kind != resolution.FailedOutcome || o.Class != resolution.FailureInfra {
+		t.Fatalf("outcome = %+v", o)
+	}
+	if o.Message != "runner panicked: nil map write in the sandbox" {
+		t.Errorf("message = %q", o.Message)
+	}
+	c, _ := st.GetCase(t.Context(), "guy/repo", 1)
+	if c.State() != resolution.Failed {
+		t.Errorf("state = %s, want failed", c.State())
+	}
+	// The daemon is still here: the panic was recovered, not propagated.
+	if got := s.Running(); len(got) != 0 {
+		t.Errorf("still running = %v", got)
+	}
+}
+
+// TestSchedulerBackstopsASilentRunner covers the same hole reached by a
+// plain return instead of a panic.
+func TestSchedulerBackstopsASilentRunner(t *testing.T) {
+	st := storetest.Open(t)
+	queueCases(t, st, 1)
+	gh := &fakeGitHub{issues: map[string]resolution.IssueDetail{keyOf("guy/repo", 1): issue(true)}}
+	runner := silentRunner{done: make(chan struct{})}
+	s := &Scheduler{Store: st, Runner: runner, Concurrency: 1, Clock: fixedClock{t0}, Budgets: policy(t), GitHub: gh}
+	if err := s.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	<-runner.done
+	if !s.WaitTimeout(5 * time.Second) {
+		t.Fatal("runner goroutine never returned")
+	}
+	o := waitForOutcome(t, s)
+	if o.Kind != resolution.FailedOutcome || o.Message != "runner returned without recording an outcome" {
+		t.Errorf("outcome = %+v", o)
+	}
+}
+
 func TestSchedulerSkipsClosedIssue(t *testing.T) {
 	st := storetest.Open(t)
 	queueCases(t, st, 1)

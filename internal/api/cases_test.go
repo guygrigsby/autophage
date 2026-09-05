@@ -41,6 +41,9 @@ func (f *fakeGitHub) GetIssue(_ context.Context, repo string, n int) (resolution
 	}
 	return d, nil
 }
+func (f *fakeGitHub) DefaultBranch(_ context.Context, repo resolution.Repository) (string, error) {
+	return repo.DefaultBranch, nil
+}
 func (f *fakeGitHub) MintToken(context.Context, resolution.Repository) (resolution.Token, error) {
 	return resolution.Token{Value: "t", ExpiresAt: t0.Add(time.Hour)}, nil
 }

@@ -30,11 +30,22 @@ func (r *Recovery) Run(ctx context.Context) error {
 	return nil
 }
 
+// one ends a single attempt. The reason follows the case: an attempt still
+// open under a Closed case was running when the issue was closed, and
+// naming that daemon_restart both reads wrong to the operator and spends
+// the aggregate's requeue-once allowance on a case that will never run
+// again.
 func (r *Recovery) one(ctx context.Context, a store.OpenAttempt) error {
-	o, err := resolution.OutcomeAborted(resolution.AbortDaemonRestart, "The daemon restarted during the attempt.", resolution.Usage{}, r.Clock.Now())
-	if err != nil {
-		return err
-	}
-	_, err = r.Store.UpdateCase(ctx, a.Repository, a.Number, func(c *resolution.Case) error { return c.RecordOutcome(a.AttemptID, o) })
+	_, err := r.Store.UpdateCase(ctx, a.Repository, a.Number, func(c *resolution.Case) error {
+		reason, summary := resolution.AbortDaemonRestart, "The daemon restarted during the attempt."
+		if c.State() == resolution.Closed {
+			reason, summary = resolution.AbortIssueClosed, "The issue was closed while the attempt was running."
+		}
+		o, err := resolution.OutcomeAborted(reason, summary, resolution.Usage{}, r.Clock.Now())
+		if err != nil {
+			return err
+		}
+		return c.RecordOutcome(a.AttemptID, o)
+	})
 	return err
 }
