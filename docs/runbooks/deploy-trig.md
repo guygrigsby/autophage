@@ -136,11 +136,13 @@ If the tailnet ACL refuses Funnel on trig (**operator**, admin console):
 **Verify:**
 
 ```bash
-curl -si https://trig.guy.ts.net/webhook/github -X POST
+curl -si -X POST -H 'Content-Type: application/json' -d '{}' https://trig.guy.ts.net/webhook/github
 ```
 
-Expect `401`. That means Funnel reached the daemon and the daemon rejected
-the unsigned request; anything else means Funnel or the daemon is not up yet.
+Expect `401` (`unauthenticated`): Funnel reached the daemon and the daemon
+rejected the unsigned JSON request. A bare POST without the JSON content type
+gets `400` instead, which also proves the daemon answered. Anything else means
+Funnel or the daemon is not up yet.
 
 ## 8. Service (ssh)
 
