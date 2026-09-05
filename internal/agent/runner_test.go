@@ -1028,3 +1028,29 @@ func TestRunnerModelErrorIsAModelFailure(t *testing.T) {
 		t.Errorf("metrics = %v", got)
 	}
 }
+
+// The summary is spliced into the pull request body, where GitHub acts on
+// every closing phrase it finds: an attempt that mentioned a neighbouring
+// issue would close it on merge. Only the reference the runner writes may
+// close anything.
+func TestRunnerStripsClosingKeywordsFromTheSummary(t *testing.T) {
+	st := storetest.Open(t)
+	id := startedAttempt(t, st, resolution.Auto)
+	sb := &fakeSandbox{commits: true}
+	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
+	summary := goodSummary + "\nThis also fixes #3, Closes: guy/other#9 and resolved #11."
+	r, _, _ := newRunner(t, st, sb, gh, scripted(0, summary, nil))
+	r.Run(t.Context(), id)
+	prs := gh.pullRequests()
+	if len(prs) != 1 {
+		t.Fatalf("prs = %v", prs)
+	}
+	body := prs[0]
+	if !strings.Contains(body, "This also #3, guy/other#9 and #11.") {
+		t.Errorf("the keywords were not stripped from the summary:\n%s", body)
+	}
+	// Exactly one closing phrase reaches GitHub: the runner's own.
+	if got := closingKeywords.FindAllString(body, -1); len(got) != 1 || !strings.EqualFold(got[0], "Fixes #7") {
+		t.Errorf("closing phrases in the body = %q", got)
+	}
+}

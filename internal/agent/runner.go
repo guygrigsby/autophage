@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -482,7 +483,7 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	} else if t := strings.TrimSpace(detail.Title); t != "" {
 		title = "autophage: " + truncate(t, 70)
 	}
-	body := fmt.Sprintf("%s\n\nFixes #%d", summary, c.Number())
+	body := fmt.Sprintf("%s\n\nFixes #%d", stripClosingKeywords(summary), c.Number())
 	pr, err := r.GitHub.OpenPullRequest(ghCtx, c.Repository(), c.Branch(), repo.DefaultBranch, title, body)
 	if err != nil {
 		// The branch is pushed, so a retry after approval resumes from it.
@@ -490,6 +491,20 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	}
 	o, cerr := resolution.OutcomePullRequest(pr, head, summary, report.Usage, r.now())
 	return r.settled(o, cerr, report.Usage), nil
+}
+
+// closingKeywords matches one of GitHub's closing keywords together with the
+// issue it names, in either the bare "#12" or the "owner/repo#12" form.
+var closingKeywords = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?[ \t]+((?:[\w.-]+/[\w.-]+)?#\d+)`)
+
+// stripClosingKeywords leaves the reference and drops the keyword in front
+// of it. The agent's summary is spliced into the pull request body, and
+// GitHub acts on every closing phrase it finds there: a summary that
+// mentioned "fixes #12" would close a neighbouring issue nobody worked on
+// when the pull request merged. The one closing reference the body carries
+// is the one the runner writes itself.
+func stripClosingKeywords(s string) string {
+	return closingKeywords.ReplaceAllString(s, "$1")
 }
 
 // refreshDefaultBranch corrects what enrollment stored, since the
