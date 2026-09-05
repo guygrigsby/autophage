@@ -24,6 +24,14 @@ type budgetTool struct {
 
 func (b *budgetTool) Execute(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
 	out, err := b.Tool.Execute(ctx, args)
+	// A read-only call cannot have moved the diff, and the count is not
+	// free: it is a podman exec into the agent's container running git over
+	// the whole tree. Reading a file is the commonest thing an agent does,
+	// so counting after one spends most of the budget check on an answer
+	// that cannot have changed.
+	if b.ReadOnly(args) {
+		return out, err
+	}
 	n, derr := b.diffLines(ctx)
 	if derr != nil {
 		b.logf("diff lines: %v", derr)

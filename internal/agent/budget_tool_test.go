@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 	"testing"
 
 	ac "github.com/voocel/agentcore"
@@ -22,6 +23,28 @@ func (readOnlyTool) Execute(context.Context, json.RawMessage) (json.RawMessage, 
 }
 
 var _ ac.ReadOnlyer = readOnlyTool{}
+
+// A read-only tool is the commonest call an agent makes and cannot have
+// moved the diff; counting after one is a podman exec into the container for
+// an answer that cannot have changed.
+func TestBudgetToolCountsOnlyAfterAWritingTool(t *testing.T) {
+	var counts atomic.Int32
+	diff := func(context.Context) (int, error) { counts.Add(1); return 0, nil }
+	ro := &budgetTool{Tool: readOnlyTool{}, limit: 100, diffLines: diff, stop: &stopFlag{}, abort: func() {}, logf: func(string, ...any) {}}
+	if _, err := ro.Execute(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := counts.Load(); got != 0 {
+		t.Errorf("the diff was counted %d times after a read-only tool", got)
+	}
+	writing := &budgetTool{Tool: &echoTool{}, limit: 100, diffLines: diff, stop: &stopFlag{}, abort: func() {}, logf: func(string, ...any) {}}
+	if _, err := writing.Execute(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := counts.Load(); got != 1 {
+		t.Errorf("the diff was counted %d times after a writing tool, want 1", got)
+	}
+}
 
 func TestBudgetToolForwardsReadOnly(t *testing.T) {
 	wrapped := &budgetTool{Tool: readOnlyTool{}, stop: &stopFlag{}, abort: func() {}, logf: func(string, ...any) {}}
