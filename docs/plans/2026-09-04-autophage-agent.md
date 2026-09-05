@@ -1438,7 +1438,7 @@ func TestSweepCancelsAttemptsOfClosedCases(t *testing.T) {
 	d := &Dispatcher{Store: st, Translator: &github.Translator{Store: st, Clock: fixedClock{t0}, ApprovedLabel: "approved", BotLogin: "b"},
 		Triage: &Triage{Store: st, Triager: fakeTriager{size: resolution.Small}, GitHub: gh, Clock: fixedClock{t0}},
 		Scheduler: &Scheduler{Store: st, Runner: &fakeRunner{release: make(chan struct{})}, Concurrency: 1, Clock: fixedClock{t0}, Budgets: policy(t), GitHub: gh},
-		Commenter: &Commenter{Store: st, GitHub: gh}, Labels: &LabelSetup{Store: st, GitHub: gh, Label: "approved"},
+		Commenter: &Commenter{Store: st, GitHub: gh, Label: "approved"}, Enrollment: &Enrollment{Store: st, GitHub: gh, Label: "approved"},
 		Recovery: &Recovery{Store: st, Clock: fixedClock{t0}}, Canceller: fc}
 	d.Sweep(t.Context())
 	if len(fc.cancel) != 1 || fc.cancel[0] != id+":issue_closed" {
