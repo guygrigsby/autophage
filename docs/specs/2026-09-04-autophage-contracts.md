@@ -57,12 +57,12 @@ Not endpoints, but the seams the adapters implement. All in Resolution's types.
 | `GitHub` | `PostComment(repository, number, body) (githubCommentID, error)` | | Honors `Retry-After`; retried by the outbox poster |
 | `GitHub` | `OpenPullRequest(repository, head, base, title, body) (prNumber, error)` | | Body carries `Fixes #<number>` |
 | `GitHub` | `EnsureLabel(repository, name) error` | | Idempotent on GitHub's side |
-| `Sandbox` | `Prepare(repository, branch, defaultBranch, token) (Workspace{path, baseSha}, error)` | `internal/sandbox` (port and adapter; the port's types are tools and containers, not domain types) | Clone or fetch, rebase branch onto default, warm deps in the prep container |
-| `Sandbox` | `Start(workspace) (Container, error)` | | Agent container, no network, hardened |
-| `Sandbox` | `Tools(container) ([]Tool, closer, error)` | | Dial the toolbox over `podman exec -i`, adapt via `jess/mcp` |
-| `Sandbox` | `DiffLines(container, baseSha) (int, error)` | | `git diff --shortstat` inside the container |
-| `Sandbox` | `CommitAndPush(workspace, token, message) (headSha, dirty bool, error)` | | Host side; token as a per-command header |
-| `Sandbox` | `Teardown(container) error` | | |
+| `Sandbox` | `Prepare(ctx, repository, cloneURL, branch, defaultBranch, token) (Workspace{path, cloneURL, baseSha}, error)` | `internal/sandbox` (port and adapter; the port's types are tools and containers, not domain types) | Clone or fetch, rebase branch onto default, warm deps in the prep container; locks the repository's workspace until `Teardown` |
+| `Sandbox` | `Start(ctx, ws, attemptID) (Container, error)` | | Agent container, no network, hardened |
+| `Sandbox` | `Tools(ctx, c) ([]Tool, closer, error)` | | Dial the toolbox over `podman exec -i`, adapt via `jess/mcp` |
+| `Sandbox` | `DiffLines(ctx, c, baseSha) (int, error)` | | `git diff --numstat` inside the container |
+| `Sandbox` | `CommitAndPush(ctx, ws, token, message) (headSha string, pushed bool, error)` | | Host side; token as a per-command header; `pushed` reports whether the push succeeded, not whether anything changed (the runner compares `headSha` to `Workspace.BaseSha` for that) |
+| `Sandbox` | `Teardown(ctx, c) error` | | Releases the repository's workspace lock `Prepare` took |
 | `Agent` | `Run(ctx, brief, tools, budget, hooks) (RunReport{runId, usage, finalSummary, stop Limit or none}, error)` | `internal/agent` | Builds one jess agent; wires steers at `Budget.WarnAt()`; forces the summary turn; `hooks.AfterTool` lets the runner check `DiffLines` |
 | `Triager` | `Classify(title, body) (Size, rationale, model, error)` | `internal/agent` | Structured output; one model call on the triage tier |
 

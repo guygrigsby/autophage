@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,6 +72,12 @@ func TestPrepareClonesThenFetchesAndBranches(t *testing.T) {
 	if cfg := git(t, ws.Path, "config", "--list"); strings.Contains(cfg, "tok") || strings.Contains(cfg, "extraheader") {
 		t.Errorf("token or header leaked into config:\n%s", cfg)
 	}
+	// A real attempt always ends in Teardown, which releases this
+	// repository's workspace lock for the next attempt; mirror that here
+	// before Prepare-ing again, or the second call blocks forever.
+	if err := m.Teardown(ctx, Container{Workspace: ws}); err != nil {
+		t.Fatal(err)
+	}
 	ws2, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
 	if err != nil || ws2.BaseSha != ws.BaseSha {
 		t.Errorf("second prepare: %+v %v", ws2, err)
@@ -97,6 +104,14 @@ func TestCommitAndPushThenResumeRebases(t *testing.T) {
 	}
 	if author := git(t, bare, "log", "-1", "--format=%an <%ae>", "autophage/7"); author != "autophage[bot] <autophage[bot]@users.noreply.github.com>" {
 		t.Errorf("author = %q", author)
+	}
+	if cfg := git(t, ws.Path, "config", "--list"); strings.Contains(cfg, "tok") || strings.Contains(cfg, "extraheader") {
+		t.Errorf("token or header leaked into config after push:\n%s", cfg)
+	}
+	// A real attempt always ends in Teardown, which releases this
+	// repository's workspace lock for the next attempt.
+	if err := m.Teardown(ctx, Container{Workspace: ws}); err != nil {
+		t.Fatal(err)
 	}
 
 	// main moves on; the resumed attempt must rebase onto it.
@@ -132,11 +147,19 @@ func TestPrepareLeavesConflictMarkersOnRebaseConflict(t *testing.T) {
 	m := manager(t)
 	bare := origin(t)
 	ctx := t.Context()
-	ws, _ := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+	ws, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(ws.Path, "README.md"), []byte("# ours\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := m.CommitAndPush(ctx, ws, "tok", "ours"); err != nil {
+		t.Fatal(err)
+	}
+	// A real attempt always ends in Teardown, which releases this
+	// repository's workspace lock for the next attempt.
+	if err := m.Teardown(ctx, Container{Workspace: ws}); err != nil {
 		t.Fatal(err)
 	}
 	other := filepath.Join(t.TempDir(), "other")
@@ -154,5 +177,151 @@ func TestPrepareLeavesConflictMarkersOnRebaseConflict(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(ws2.Path, "README.md"))
 	if !strings.Contains(string(b), "<<<<<<<") {
 		t.Errorf("no conflict markers left for the agent:\n%s", b)
+	}
+}
+
+// TestCommitAndPushIgnoresHostileGitConfig proves the critical fix: /work is
+// bind-mounted whole, so a compromised agent container can rewrite
+// .git/config (remote.origin.url, a credential helper, an sshCommand, an
+// insteadOf rewrite) before the host ever runs git again. CommitAndPush must
+// discard whatever config it finds and push to the real origin only.
+func TestCommitAndPushIgnoresHostileGitConfig(t *testing.T) {
+	m := manager(t)
+	bare := origin(t)
+	hostile := origin(t)
+	ctx := t.Context()
+	ws, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws.CloneURL != bare {
+		t.Fatalf("ws.CloneURL = %q, want %q", ws.CloneURL, bare)
+	}
+
+	hostileConfig := fmt.Sprintf(`[remote "origin"]
+	url = %s
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[core]
+	sshCommand = touch /tmp/autophage-pwned
+[credential]
+	helper = "!echo pwned"
+[alias]
+	push = "!echo pwned"
+`, hostile)
+	if err := os.WriteFile(filepath.Join(ws.Path, ".git", "config"), []byte(hostileConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "fix.txt"), []byte("fixed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sha, pushed, err := m.CommitAndPush(ctx, ws, "tok", "autophage: ignore hostile config")
+	if err != nil || !pushed || len(sha) != 40 {
+		t.Fatalf("push: %s %v %v", sha, pushed, err)
+	}
+	if got := git(t, bare, "log", "-1", "--format=%s", "autophage/7"); got != "autophage: ignore hostile config" {
+		t.Errorf("push did not land on the real remote: %q", got)
+	}
+	if got := git(t, hostile, "log", "--format=%s", "HEAD"); got != "seed" {
+		t.Errorf("push leaked to the hostile remote: %q", got)
+	}
+	if cfg := git(t, ws.Path, "config", "--list"); strings.Contains(cfg, "tok") || strings.Contains(cfg, "extraheader") || strings.Contains(cfg, "pwned") {
+		t.Errorf("hostile or leaked config survived:\n%s", cfg)
+	}
+}
+
+// TestPrepareLocksPerRepository proves two concurrent attempts on the same
+// repository cannot share one workspace: the scheduler's concurrency limit
+// is across all cases, not per repository, so this package owns the
+// exclusion itself.
+func TestPrepareLocksPerRepository(t *testing.T) {
+	m := manager(t)
+	bare := origin(t)
+	ctx := t.Context()
+
+	ws1, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c1 := Container{Name: "fake-container-1", Workspace: ws1}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok"); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("second Prepare returned before the first attempt's Teardown released the lock")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if err := m.Teardown(ctx, c1); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second Prepare did not unblock after Teardown released the lock")
+	}
+}
+
+// TestPrepareReleasesLockOnItsOwnFailure proves a Prepare that fails before
+// Start is ever called does not leak the repository's lock forever.
+func TestPrepareReleasesLockOnItsOwnFailure(t *testing.T) {
+	m := manager(t)
+	bare := origin(t)
+	ctx := t.Context()
+	badURL := filepath.Join(t.TempDir(), "does-not-exist.git")
+	if _, err := m.Prepare(ctx, "guy/repo", badURL, "autophage/7", "main", "tok"); err == nil {
+		t.Fatal("expected Prepare to fail against a nonexistent remote")
+	}
+	boundedCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if _, err := m.Prepare(boundedCtx, "guy/repo", bare, "autophage/7", "main", "tok"); err != nil {
+		t.Fatalf("Prepare after a failed Prepare should not be blocked by a leaked lock: %v", err)
+	}
+}
+
+// TestStartReleasesLockOnItsOwnFailure proves a Start that fails does not
+// leak the repository's lock forever either (Teardown is never called in
+// this case, so Start must release what Prepare acquired).
+func TestStartReleasesLockOnItsOwnFailure(t *testing.T) {
+	m := manager(t)
+	bare := origin(t)
+	ctx := t.Context()
+	ws, err := m.Prepare(ctx, "guy/repo", bare, "autophage/7", "main", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workingPodman := m.Podman
+	m.Podman = filepath.Join(t.TempDir(), "no-such-podman-binary")
+	if _, err := m.Start(ctx, ws, "attempt-1"); err == nil {
+		t.Fatal("expected Start to fail against a nonexistent podman binary")
+	}
+	m.Podman = workingPodman // isolate the assertion to the lock, not to Podman working
+	boundedCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if _, err := m.Prepare(boundedCtx, "guy/repo", bare, "autophage/7", "main", "tok"); err != nil {
+		t.Fatalf("Prepare after a failed Start should not be blocked by a leaked lock: %v", err)
+	}
+}
+
+// TestWorkspacePathRejectsMalformedRepository proves the workspace path
+// builder refuses anything that is not exactly two non-empty segments with
+// no ".." component, so a repository string cannot walk WorkspacesDir.
+func TestWorkspacePathRejectsMalformedRepository(t *testing.T) {
+	m := &Manager{WorkspacesDir: t.TempDir()}
+	for _, bad := range []string{"noSlash", "a/b/c", "/leading", "trailing/", "a/..", "../b", "a/b/../c", ""} {
+		if _, err := m.workspacePath(bad); err == nil {
+			t.Errorf("workspacePath(%q) should have failed", bad)
+		}
+	}
+	if _, err := m.workspacePath("guy/repo"); err != nil {
+		t.Errorf("workspacePath(good) failed: %v", err)
 	}
 }

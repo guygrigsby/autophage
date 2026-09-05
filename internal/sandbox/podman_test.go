@@ -85,3 +85,66 @@ func TestContainerLifecycleToolsAndDiff(t *testing.T) {
 		t.Error("container still exists after teardown")
 	}
 }
+
+// TestStartHardensTheAgentContainer runs on the Mac against a stub podman
+// that records its argv and asserts the full hardening flag set from ADR
+// 0002 is present: no network, hardened user namespace, dropped
+// capabilities, no new privileges, read-only root with writable /tmp and
+// /home/agent, resource limits and --replace so a crash between Start and
+// Teardown cannot wedge the next attempt on a name collision.
+func TestStartHardensTheAgentContainer(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	bin := filepath.Join(dir, "podman")
+	script := "#!/bin/sh\necho \"$@\" >> " + argsFile + "\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{Podman: bin, Image: "img", WorkspacesDir: t.TempDir(), Memory: "1g", CPUs: "1", Pids: 256, BotName: "b", BotEmail: "b@x", Logf: t.Logf}
+	ws := Workspace{Path: t.TempDir(), Repository: "guy/repo"}
+	if _, err := m.Start(t.Context(), ws, "attempt-1"); err != nil {
+		t.Fatal(err)
+	}
+	recorded, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := string(recorded)
+	for _, want := range []string{
+		"--network=none", "--userns=keep-id", "--cap-drop=all",
+		"--security-opt=no-new-privileges", "--read-only",
+		"--tmpfs /tmp:rw,size=1g", "--tmpfs /home/agent:rw,size=256m",
+		"--memory 1g", "--cpus 1", "--pids-limit 256", "--replace",
+		"GOPROXY=off",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("podman run args missing %q:\n%s", want, line)
+		}
+	}
+}
+
+// TestTeardownToleratesMissingContainer runs on the Mac against a stub
+// podman that fails as podman rm does for a container that is already gone.
+func TestTeardownToleratesMissingContainer(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "podman")
+	script := "#!/bin/sh\necho 'Error: no such container' >&2\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{Podman: bin, Logf: t.Logf}
+	c := Container{Name: "gone", Workspace: Workspace{Repository: "guy/repo"}}
+	if err := m.Teardown(t.Context(), c); err != nil {
+		t.Fatalf("Teardown should tolerate a missing container: %v", err)
+	}
+}
+
+// TestVolumeSlugAvoidsCollisions proves the cache volume slug cannot let two
+// distinct repositories share a cache: a plain "/" -> "-" replace collides
+// "a/b-c" with "a-b/c".
+func TestVolumeSlugAvoidsCollisions(t *testing.T) {
+	a := volumeSlug("a/b-c")
+	b := volumeSlug("a-b/c")
+	if a == b {
+		t.Errorf("volumeSlug collided for %q and %q: %q", "a/b-c", "a-b/c", a)
+	}
+}

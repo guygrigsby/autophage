@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"strconv"
@@ -19,8 +21,16 @@ func (m *Manager) podman() string {
 	return m.Podman
 }
 
+// volumeSlug names one repository's cache volumes. Appending 8 hex
+// characters of sha256(repository) after the "/" -> "-" replace keeps
+// "a/b-c" and "a-b/c" from colliding on the same slug.
+func volumeSlug(repository string) string {
+	sum := sha256.Sum256([]byte(repository))
+	return strings.ReplaceAll(repository, "/", "-") + "-" + hex.EncodeToString(sum[:])[:8]
+}
+
 func cacheVolumes(repository string) []string {
-	slug := strings.ReplaceAll(repository, "/", "-")
+	slug := volumeSlug(repository)
 	return []string{
 		"-v", "autophage-cache-go-" + slug + ":/cache/go",
 		"-v", "autophage-cache-npm-" + slug + ":/cache/npm",
@@ -28,27 +38,10 @@ func cacheVolumes(repository string) []string {
 	}
 }
 
-// warm runs the dependency warmer in a networked prep container.
-func (m *Manager) warm(ctx context.Context, ws Workspace) error {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
-	defer cancel()
-	args := append([]string{"run", "--rm", "--userns=keep-id", "-v", ws.Path + ":/work:Z"}, cacheVolumes(ws.Repository)...)
-	args = append(args, "-w", "/work", m.Image, "warm-deps")
-	out, err := run(ctx, "", nil, m.podman(), args...)
-	m.logf("warm-deps %s: %s", ws.Repository, lastLine(out))
-	return err
-}
-
-// Start runs the agent container: no network, hardened, workspace and caches
-// mounted, idling until the daemon execs the toolbox into it.
-func (m *Manager) Start(ctx context.Context, ws Workspace, attemptID string) (Container, error) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	name := "autophage-" + attemptID
-	args := []string{"run", "-d", "--name", name, "--network=none", "--userns=keep-id",
-		"--cap-drop=all", "--security-opt=no-new-privileges", "--read-only", "--tmpfs", "/tmp:rw,size=1g",
-		"-e", "GOPROXY=off", "-e", "GOFLAGS=-mod=mod",
-		"-v", ws.Path + ":/work:Z"}
+// resourceLimitArgs builds the --memory/--cpus/--pids-limit flags shared by
+// the prep and agent containers, omitting whichever the Manager left unset.
+func (m *Manager) resourceLimitArgs() []string {
+	var args []string
 	if m.Memory != "" {
 		args = append(args, "--memory", m.Memory)
 	}
@@ -58,12 +51,50 @@ func (m *Manager) Start(ctx context.Context, ws Workspace, attemptID string) (Co
 	if m.Pids > 0 {
 		args = append(args, "--pids-limit", strconv.Itoa(m.Pids))
 	}
+	return args
+}
+
+// warm runs the dependency warmer in a networked prep container. It carries
+// the same non-root-namespace and capability hardening as the agent
+// container (network stays on: this is the only phase allowed to reach the
+// registries the lockfiles name).
+func (m *Manager) warm(ctx context.Context, ws Workspace) error {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
+	defer cancel()
+	args := []string{"run", "--rm", "--userns=keep-id", "--cap-drop=all", "--security-opt=no-new-privileges"}
+	args = append(args, m.resourceLimitArgs()...)
+	args = append(args, "-v", ws.Path+":/work:Z")
+	args = append(args, cacheVolumes(ws.Repository)...)
+	args = append(args, "-w", "/work", m.Image, "warm-deps")
+	stdout, err := run(ctx, "", nil, m.podman(), args...)
+	m.logf("warm-deps %s: %s", ws.Repository, lastLine(stdout))
+	return err
+}
+
+// Start runs the agent container: no network, hardened, workspace and
+// caches mounted, idling until the daemon execs the toolbox into it.
+// --replace clears out any container left by a name collision with a
+// crashed previous attempt, so a crash between Start and Teardown cannot
+// wedge the next attempt on "name already in use". On its own failure Start
+// releases the workspace lock Prepare acquired, since the runner only calls
+// Teardown (which also releases it) after a successful Start.
+func (m *Manager) Start(ctx context.Context, ws Workspace, attemptID string) (Container, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	name := "autophage-" + attemptID
+	args := []string{"run", "-d", "--replace", "--name", name, "--network=none", "--userns=keep-id",
+		"--cap-drop=all", "--security-opt=no-new-privileges", "--read-only",
+		"--tmpfs", "/tmp:rw,size=1g", "--tmpfs", "/home/agent:rw,size=256m",
+		"-e", "GOPROXY=off", "-e", "GOFLAGS=-mod=mod",
+		"-v", ws.Path + ":/work:Z"}
+	args = append(args, m.resourceLimitArgs()...)
 	args = append(args, cacheVolumes(ws.Repository)...)
 	args = append(args, "-w", "/work", m.Image, "sleep", "infinity")
 	if _, err := run(ctx, "", nil, m.podman(), args...); err != nil {
+		m.unlock(ws.Repository)
 		return Container{}, fmt.Errorf("start container: %w", err)
 	}
-	return Container{Name: name}, nil
+	return Container{Name: name, Workspace: ws}, nil
 }
 
 // Tools dials the toolbox inside the container over podman exec stdio.
@@ -78,24 +109,35 @@ func (m *Manager) Tools(ctx context.Context, c Container) ([]ac.Tool, io.Closer,
 
 // DiffLines counts added plus removed lines against base, inside the
 // container so nothing the agent did can reach the host through a path.
+// baseSha is validated before it is spliced into the shell script: an
+// unvalidated value here would be a shell injection into podman exec.
 func (m *Manager) DiffLines(ctx context.Context, c Container, baseSha string) (int, error) {
+	baseSha, err := validateSha(baseSha)
+	if err != nil {
+		return 0, fmt.Errorf("diff lines: refusing base sha: %w", err)
+	}
 	script := "cd /work && git add -N . && git diff --numstat " + baseSha + " | awk '{a+=$1; d+=$2} END {print a+d}'"
-	out, err := run(ctx, "", nil, m.podman(), "exec", c.Name, "sh", "-c", script)
+	stdout, err := run(ctx, "", nil, m.podman(), "exec", c.Name, "sh", "-c", script)
 	if err != nil {
 		return 0, err
 	}
-	n, err := strconv.Atoi(lastLine(out))
+	n, err := strconv.Atoi(lastLine(stdout))
 	if err != nil {
-		return 0, fmt.Errorf("diff lines: %q", out)
+		return 0, fmt.Errorf("diff lines: %q", stdout)
 	}
 	return n, nil
 }
 
+// Teardown removes the container and releases the workspace lock Prepare
+// acquired and Start held onto. The lock is released before the podman rm
+// attempt, not deferred after it, so a Teardown against a broken or missing
+// podman binary still frees the repository for the next attempt.
 func (m *Manager) Teardown(ctx context.Context, c Container) error {
+	m.unlock(c.Workspace.Repository)
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	out, err := run(ctx, "", nil, m.podman(), "rm", "-f", c.Name)
-	if err != nil && !strings.Contains(out, "no such container") {
+	stdout, err := run(ctx, "", nil, m.podman(), "rm", "-f", c.Name)
+	if err != nil && !strings.Contains(stdout, "no such container") {
 		return err
 	}
 	return nil
