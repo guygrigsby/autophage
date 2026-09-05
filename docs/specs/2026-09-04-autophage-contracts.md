@@ -10,6 +10,7 @@ One closed set, chosen from by every endpoint.
 |---|---|---|
 | `unauthenticated` | 401 | Missing or invalid credential for the caller class |
 | `invalid_request` | 400 | Malformed body, missing header, unknown field, bad value |
+| `forbidden` | 403 | The caller reached a loopback-only endpoint from somewhere else, or through a proxy |
 | `not_found` | 404 | The case, attempt, repository or upstream issue does not exist |
 | `conflict` | 409 | The aggregate refused the transition in its current state |
 | `upstream_unavailable` | 502 | GitHub could not be reached or answered with an error during a synchronous call |
@@ -51,6 +52,7 @@ Not endpoints, but the seams the adapters implement. All in Resolution's types.
 |---|---|---|---|
 | `GitHub` | `VerifyAndStore(headers, body) (Delivery, duplicate bool, error)` | `internal/github` | HMAC then insert; the endpoint handler is a thin wrapper |
 | `GitHub` | `GetIssue(repository, number) (title, body, Requester, error)` | | For operator `run` on an issue with no case, and to refresh title and body at attempt start |
+| `GitHub` | `DefaultBranch(repository) (branch, error)` | | The installation payloads carry no default branch, so enrollment records a placeholder; Enrollment corrects it on the sweep that follows |
 | `GitHub` | `MintToken(repository) (token, expiresAt, error)` | | App JWT to installation token scoped to the one repository |
 | `GitHub` | `PostComment(repository, number, body) (githubCommentID, error)` | | Honors `Retry-After`; retried by the outbox poster |
 | `GitHub` | `OpenPullRequest(repository, head, base, title, body) (prNumber, error)` | | Body carries `Fixes #<number>` |
@@ -75,18 +77,18 @@ All events are internal to the daemon. Delivery: the fact rows written in the ag
 | `CaseGated` | Case | `[*] -> Gated` | same as CaseReceived | Metrics only | at-least-once | internal | none |
 | `CaseTriaged` | Case | `Received -> Queued` or `Received -> AwaitingApproval` | `case_id, repository, number, size, rationale, model, triaged_at, to_state` | Scheduler when `to_state = queued`. Commenter when `awaiting_approval`: enqueues the rationale comment (`case_triage_comments`) | at-least-once; boot scans: Queued cases; triages with no comment link | internal | Scheduler |
 | `CaseApproved` | Case | `RecordApproval`; transition to Queued from Gated, AwaitingApproval or Failed, else none | `case_id, repository, number, approval_id, approver{login, association, trust}, source, approved_at, from_state, to_state` | Scheduler when `to_state = queued` | at-least-once; boot scan: Queued cases | internal | Scheduler |
-| `AttemptStarted` | Case | `Queued -> Attempting` | `attempt_id, case_id, repository, number, ordinal, kind, budget{max_turns, max_wall_clock, max_diff_lines}, started_at` | AttemptRunner (application): prepare, start, run, push, record. Metrics | at-least-once; boot scan: attempts with no outcome are instead ended `Aborted{DaemonRestart}` (an attempt never resumes mid-run) | internal | none (`Case.RecordRun`, `Case.RecordOutcome`) |
+| `AttemptStarted` | Case | `Queued -> Attempting` | `attempt_id, case_id, repository, number, ordinal, kind, budget{max_turns, max_wall_clock, max_diff_lines}, started_at` | AttemptRunner (application): prepare, start, run, push, record. Metrics | at-least-once; boot scan: attempts with no outcome are instead ended `Aborted{DaemonRestart}`, or `Aborted{IssueClosed}` when the case is already Closed (an attempt never resumes mid-run) | internal | none (`Case.RecordRun`, `Case.RecordOutcome`) |
 | `RunBegan` | Case | `RecordRun` | `attempt_id, run_id, model, base_sha, began_at` | Metrics. `why` reads it later | at-least-once | internal | none |
 | `AttemptEnded` | Case | `Attempting -> Done`, `-> AwaitingApproval`, `-> Failed`, `-> Queued` (restart requeue), or no transition when already Closed | `attempt_id, case_id, repository, number, outcome{kind, ended_at, usage, summary, variant fields}, from_state, to_state` | Commenter for BudgetExhausted, Failed and Aborted{OperatorStop}: enqueues the summary comment (`attempt_outcome_comments`). Scheduler when `to_state = queued`. Sandbox teardown (application). Metrics | at-least-once; boot scans: outcomes of those kinds with no comment link; Queued cases | internal | Scheduler for the requeue. The "requeue once" rule is `Case.RecordOutcome`'s own |
-| `CaseClosed` | Case | `-> Closed` | `case_id, repository, number, closed_at, from_state` | AttemptRunner: cancels the open attempt's context when `from_state = attempting`; the run then ends `Aborted{IssueClosed}` | at-least-once; boot scan: Closed cases with an open attempt are ended `Aborted{IssueClosed}` | internal | none (`Case.Close`, then `Case.RecordOutcome`) |
-| `RepositoryEnrolled` | Repository | insert, or Removal row deleted | `full_name, installation_id, default_branch, enrolled_at` | LabelSetup (application): `GitHub.EnsureLabel` then records `repository_label_setups` | at-least-once; boot scan: enrolled repositories with no label setup row | internal | none |
+| `CaseClosed` | Case | `-> Closed` | `case_id, repository, number, closed_at, from_state` | AttemptRunner: cancels the open attempt's context when `from_state = attempting`; the run then ends `Aborted{IssueClosed}` | at-least-once; boot scan: Recovery reads each open attempt's case and ends it `Aborted{IssueClosed}` when that case is Closed | internal | none (`Case.Close`, then `Case.RecordOutcome`) |
+| `RepositoryEnrolled` | Repository | insert, or Removal row deleted | `full_name, installation_id, default_branch, enrolled_at` | Enrollment (application): `GitHub.DefaultBranch` then `GitHub.EnsureLabel`, then records `repository_label_setups` | at-least-once; boot scan: enrolled repositories with no label setup row | internal | none |
 | `RepositoryRemoved` | Repository | Removal row inserted | `full_name, removed_at` | Scheduler: never starts an attempt for a removed repository. A running attempt fails at the next GitHub call with `Failed{Infra}` | at-least-once | internal | Scheduler |
 
 Domain services named above:
 
 - **Scheduler**: owns the rules that span cases. At most `concurrency` attempts open at once across all cases; Queued cases start in order of the time they became Queued (latest `case_transitions` row with `to_state = queued`); no attempt starts for a removed repository. Invoked by the dispatcher on every wake and on boot.
 
-Application services, for the record and not counting as owners of any rule: Translator, Triage, AttemptRunner, Commenter (outbox poster), LabelSetup, Dispatcher.
+Application services, for the record and not counting as owners of any rule: Translator, Triage, AttemptRunner, Commenter (outbox poster), Enrollment, Dispatcher.
 
 ## DDL
 

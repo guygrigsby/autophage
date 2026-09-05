@@ -28,3 +28,15 @@ jess is the harness. The daemon builds one jess agent per attempt, drives it wit
 - OpenHands: the closest product (its resolver is this feature) but heavy: Python, docker runtime images, config split across four hierarchies, open bugs on custom provider URLs in headless mode.
 - pi, Codex CLI, goose, Kimi Code CLI, crush, aider: no gate hook a daemon can answer, text or event-only seams, no budget controls.
 - Claude Code headless: ruled out by the requirement to run on non-Anthropic models.
+
+## Note, 2026-09-05
+
+"Only `internal/agent` imports jess" holds for the harness. Reading the
+ledger back is a second, narrower relationship: `internal/api/why.go` and
+`cmd/autophaged` import `jess/ledger` to serve `GET /api/attempts/{id}/why`,
+as a conformist consumer. They take `ledger.Chain` in its own shape and
+render it, adding no translation layer and no types of their own, and the
+join is `attempt_runs.run_id` with no foreign key across the module
+boundary. Conformist because the chain is jess's model of a run and
+autophage has no better one; a translation layer here would buy nothing and
+would have to be rewritten every time the ledger gains a field.

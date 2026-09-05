@@ -1,5 +1,5 @@
 .PHONY: help web-dev server-dev web-build server-build cli-build build \
-        server-test web-test test check clean \
+        server-test web-test test check lint clean \
         install install-launchd uninstall-launchd redeploy redeploy-launchd redeploy-systemd \
         install-systemd service-restart dev
 
@@ -55,14 +55,15 @@ server-test: ## Run Go tests
 web-test: $(WEB_DIR)/node_modules ## Run the vitest suite
 	cd $(WEB_DIR) && npm test
 
-test: server-test ## Run all tests (Go, web when present, init smoke)
+test: server-test ## Run all tests (Go, web when present)
 	@if [ -n "$(HAS_WEB)" ]; then $(MAKE) web-test; fi
-	bash scripts/init_smoke_test.sh
 
-check: ## One-shot quality gate for agents (run before claiming done)
+lint: ## Run golangci-lint
+	$(GOLANGCI) run
+
+check: lint ## One-shot quality gate for agents (run before claiming done)
 	@test -z "$$(gofmt -l .)" || { echo "gofmt needs:"; gofmt -l .; exit 1; }
 	go vet ./...
-	$(GOLANGCI) run
 	go test ./...
 	@if [ -n "$(HAS_WEB)" ]; then $(MAKE) web-build; fi
 

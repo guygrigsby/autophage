@@ -4,7 +4,7 @@ A daemon on trig that watches issues on enrolled GitHub repositories through a G
 
 `issues.opened` arrives and is stored byte-exact. A trusted requester (Owner, Member or Collaborator association) goes to Received and is triaged: a model call sizes the issue Small or Large. Small is queued under the `auto` budget; Large waits for approval with its rationale posted as a comment. An untrusted requester goes to Gated, silently, until the `approved` label is added. Approval, from a label or from the operator, queues the case under the `approved` budget. The dispatcher starts attempts for queued cases within a concurrency limit; each attempt runs to a pull request, a budget exhaustion or a failure, and the outcome drives the case's next state.
 
-This build wires the trust gate, triage state machine, scheduler, comment outbox, operator API, CLI and metrics. The sandboxed agent runner that actually executes attempts is a placeholder here: every started attempt ends immediately with `Failed{Infra}` until the agent plan (Plan E) lands.
+This build wires the trust gate, triage state machine, scheduler, comment outbox, operator API and CLI. The sandboxed agent runner that actually executes attempts is a placeholder here: every started attempt ends immediately with `Failed{Infra}` until the agent plan (Plan E) lands. `/metrics` serves two live gauges on this build, `autophage_cases{state}` and `autophage_queue_depth`, both read from the store on every scrape; the counters and the wall-clock histogram are registered but stay at zero until the runner in the agent plan increments them.
 
 Two binaries built on [perch](https://github.com/guygrigsby/perch):
 
@@ -60,7 +60,13 @@ Expose the webhook publicly with Tailscale Funnel and nothing else:
 tailscale funnel --bg --set-path /webhook/github http://127.0.0.1:8080/webhook/github
 ```
 
-`/metrics` is reachable over the tailnet only, never through Funnel.
+Serve `/metrics` to the tailnet, path-scoped so nothing else is exposed with it:
+
+```bash
+tailscale serve --bg --set-path /metrics http://127.0.0.1:8080/metrics
+```
+
+`/metrics` is reachable over the tailnet only, never through Funnel. Nothing under `/api` may ever be served through a proxy: a proxy makes every request look like it came from 127.0.0.1, which is the whole of the mint endpoint's authorization. The daemon refuses a mint carrying a proxy's headers, but the path must not be exposed in the first place.
 
 ## macOS dev (launchd)
 
