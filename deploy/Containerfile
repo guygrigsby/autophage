@@ -3,14 +3,17 @@
 # `make image`.
 #
 # Build context is the parent of this checkout (see the Makefile's `image`
-# target): `github.com/guygrigsby/jess` is pulled in via a go.mod `replace`
-# and is not part of this repo, so it has to be a sibling directory in the
-# context. Once jess is published and the replace is dropped, drop the
-# `COPY jess /jess` line below and build with context `.` instead.
+# target): `github.com/guygrigsby/jess` and `github.com/guygrigsby/llm` are
+# pulled in via go.mod `replace` directives and are not part of this repo, so
+# both have to be sibling directories in the context. `go mod download` reads
+# every replaced module's go.mod whether or not the toolbox imports it. Once
+# they are published and the replaces are dropped, drop the two COPY lines
+# below and build with context `.` instead.
 FROM docker.io/library/golang:1.26-bookworm AS toolbox
 WORKDIR /src
 COPY autophage/go.mod autophage/go.sum ./
 COPY jess /jess
+COPY llm /llm
 RUN go mod download
 COPY autophage/ .
 RUN CGO_ENABLED=0 go build -o /out/autophage-toolbox ./cmd/autophage-toolbox

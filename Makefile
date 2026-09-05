@@ -132,12 +132,14 @@ dev: ## Run autophaged watcher + Vite together (both hot-reload)
 # The build context is staged into a temp dir rather than handed the parent
 # directory: `..` ships every sibling project, every build artifact and every
 # .git in them to the build, which is slow and puts files nobody meant to
-# publish inside an image layer. jess is a sibling because the go.mod
-# `replace` points there; drop it here and from the Containerfile once jess is
-# published. A git checkout is staged with `git archive HEAD`, so only
-# committed files reach the image. A copy that is not a checkout (the sync to
-# trig excludes .git) falls back to rsync minus .git and the built binaries.
-image: ## Build the sandbox image from a staged context (this repo + the jess sibling)
+# publish inside an image layer. jess and llm are siblings because the go.mod
+# `replace` directives point there, and `go mod download` reads a replaced
+# module's go.mod whether or not the toolbox imports it; drop them here and
+# from the Containerfile once both are published. A git checkout is staged
+# with `git archive HEAD`, so only committed files reach the image. A copy
+# that is not a checkout (the sync to trig excludes .git) falls back to rsync
+# minus .git and the built binaries.
+image: ## Build the sandbox image from a staged context (this repo + the jess and llm siblings)
 	@set -euo pipefail; \
 	stage() { \
 	  mkdir -p "$$2"; \
@@ -151,6 +153,7 @@ image: ## Build the sandbox image from a staged context (this repo + the jess si
 	tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
 	stage . "$$tmp/autophage"; \
 	stage ../jess "$$tmp/jess"; \
+	stage ../llm "$$tmp/llm"; \
 	podman build -t $(IMAGE) -f "$$tmp/autophage/deploy/Containerfile" "$$tmp"
 
 image-test: ## Prove the sandbox image
