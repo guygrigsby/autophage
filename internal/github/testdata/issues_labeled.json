@@ -1,0 +1,8 @@
+{
+  "action": "labeled",
+  "issue": {"number": 7, "title": "Typo", "body": "teh", "state": "open", "author_association": "OWNER", "user": {"login": "guy"}},
+  "label": {"name": "approved"},
+  "repository": {"full_name": "guy/repo", "default_branch": "main"},
+  "sender": {"login": "guy"},
+  "installation": {"id": 42}
+}

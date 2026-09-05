@@ -1,0 +1,7 @@
+{
+  "action": "added",
+  "installation": {"id": 42},
+  "repositories_added": [{"full_name": "guy/new"}],
+  "repositories_removed": [],
+  "sender": {"login": "guy"}
+}

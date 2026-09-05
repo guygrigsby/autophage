@@ -1,0 +1,6 @@
+{
+  "action": "created",
+  "installation": {"id": 42, "account": {"login": "guy"}},
+  "repositories": [{"full_name": "guy/repo"}, {"full_name": "guy/other"}],
+  "sender": {"login": "guy"}
+}
