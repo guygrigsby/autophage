@@ -392,15 +392,16 @@ func NewRequester(login string, assoc Association) (Requester, error) {
 	if login == "" {
 		return Requester{}, Invalid("requester login is empty")
 	}
-	if _, err := ParseAssociation(string(assoc)); err != nil {
+	parsed, err := ParseAssociation(string(assoc))
+	if err != nil {
 		return Requester{}, err
 	}
 	trust := Untrusted
-	switch assoc {
+	switch parsed {
 	case AssociationOwner, AssociationMember, AssociationCollaborator:
 		trust = Trusted
 	}
-	return Requester{Login: login, Association: assoc, Trust: trust}, nil
+	return Requester{Login: login, Association: parsed, Trust: trust}, nil
 }
 ```
 
