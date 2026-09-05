@@ -227,12 +227,19 @@ func (c *Client) EnsureLabel(ctx context.Context, repository, label string) erro
 // cannot ping people.
 func neutraliseMentions(s string) string { return strings.ReplaceAll(s, "@", "@\u200b") }
 
-// retryTransport sets a default User-Agent and honors Retry-After on 403
-// and 429 up to twice, sleeping at most 60s each time, then hands the
-// response back. One instance serves both the App's own requests (the
-// token mint, which never gets a User-Agent or retry from go-github since
-// it never sees that request) and, transitively through ghinstallation,
-// the repo API calls, so the policy lives in exactly one place.
+// baseBackoff is the first wait when a throttled response names no time of
+// its own. Attempt n waits baseBackoff << n, so 1s then 2s.
+const baseBackoff = time.Second
+
+// retryTransport sets a default User-Agent and retries a 403 or 429 up to
+// twice, sleeping at most 60s each time, then hands the response back. The
+// wait comes from Retry-After, else x-ratelimit-reset, else an exponential
+// backoff: GitHub's secondary rate limits answer with neither header, and
+// giving up on those turned a throttle into a failed attempt. One instance
+// serves both the App's own requests (the token mint, which never gets a
+// User-Agent or retry from go-github since it never sees that request) and,
+// transitively through ghinstallation, the repo API calls, so the policy
+// lives in exactly one place.
 type retryTransport struct {
 	next      http.RoundTripper
 	userAgent string
@@ -266,7 +273,10 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		wait := retryAfter(resp.Header.Get("Retry-After"))
 		if wait <= 0 {
-			return resp, nil
+			wait = rateLimitReset(resp.Header.Get("X-RateLimit-Reset"), time.Now())
+		}
+		if wait <= 0 {
+			wait = baseBackoff << attempt
 		}
 		_ = resp.Body.Close()
 		select {
@@ -285,6 +295,21 @@ func cloneRequest(r *http.Request) *http.Request {
 	*r2 = *r
 	r2.Header = r.Header.Clone()
 	return r2
+}
+
+// rateLimitReset reads x-ratelimit-reset, epoch seconds, as a wait from
+// now, capped at 60s so a reset an hour out does not park the request for
+// an hour. A missing, unparseable or already-past reset is 0, which leaves
+// the caller on its backoff.
+func rateLimitReset(v string, now time.Time) time.Duration {
+	if v == "" {
+		return 0
+	}
+	epoch, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return min(max(time.Unix(epoch, 0).Sub(now), 0), 60*time.Second)
 }
 
 // retryAfter parses the seconds or HTTP-date forms, capped at 60s.

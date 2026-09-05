@@ -91,12 +91,12 @@ func (t *Translator) issue(ctx context.Context, d store.Delivery, e *gh.IssuesEv
 		if e.GetLabel().GetName() != t.ApprovedLabel {
 			return fmt.Sprintf("label %q", e.GetLabel().GetName()), errUnsubscribed
 		}
-		if _, err := t.Store.GetCase(ctx, repo, number); errors.Is(err, store.ErrNotFound) {
-			if detail, err := t.open(ctx, e); err != nil {
-				return detail, err
-			}
-		} else if err != nil {
-			return "LabelAdded", err
+		// The label can arrive before the opening delivery is processed, so
+		// create the case first. A conflict means it appeared in between,
+		// which is the outcome we wanted: carry on to the approval rather
+		// than dropping the label on the floor.
+		if detail, err := t.open(ctx, e); err != nil && !errors.Is(err, store.ErrConflict) {
+			return detail, err
 		}
 		approver, err := resolution.NewRequester(e.GetSender().GetLogin(), resolution.AssociationCollaborator)
 		if err != nil {
@@ -170,8 +170,8 @@ func (t *Translator) installationRepositories(ctx context.Context, e *gh.Install
 }
 
 // enroll records each repository. The installation payloads carry no
-// default branch; "main" is recorded and refreshed by the outbound client
-// when a token is first minted for the repository.
+// default branch, so "main" is recorded as a placeholder; app.Enrollment
+// reads the real one from GitHub on the sweep that follows.
 func (t *Translator) enroll(ctx context.Context, installationID int64, repos []*gh.Repository) (string, error) {
 	n := 0
 	for _, r := range repos {

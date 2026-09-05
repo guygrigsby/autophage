@@ -152,6 +152,65 @@ func TestMintTokenRetriesOnRateLimit(t *testing.T) {
 	}
 }
 
+// TestRetriesRateLimitWithoutHeaders proves a 429 that carries neither
+// Retry-After nor x-ratelimit-reset is still retried after a backoff.
+// GitHub's secondary rate limits answer exactly like that, and returning
+// the 429 straight through turned every one of them into a failed attempt.
+func TestRetriesRateLimitWithoutHeaders(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			http.Error(w, `{"message":"slow down"}`, http.StatusTooManyRequests)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	t.Cleanup(srv.Close)
+
+	tr := &retryTransport{next: http.DefaultTransport, userAgent: "autophage-test"}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 after the retry", resp.StatusCode)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Errorf("requests = %d, want 2", n)
+	}
+	if elapsed := time.Since(start); elapsed < baseBackoff {
+		t.Errorf("retried after %s, want at least the %s backoff", elapsed, baseBackoff)
+	}
+}
+
+// TestRateLimitResetHeader proves x-ratelimit-reset is honored when
+// Retry-After is absent, capped so a far-future reset cannot park a request
+// for the rest of the hour.
+func TestRateLimitResetHeader(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	for _, tc := range []struct {
+		name   string
+		header string
+		want   time.Duration
+	}{
+		{"absent", "", 0},
+		{"unparseable", "soon", 0},
+		{"in the past", "1699999990", 0},
+		{"seven seconds out", "1700000007", 7 * time.Second},
+		{"an hour out", "1700003600", 60 * time.Second},
+	} {
+		if got := rateLimitReset(tc.header, now); got != tc.want {
+			t.Errorf("rateLimitReset(%q) = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestGetIssueNotFoundMapsToSentinel(t *testing.T) {
 	_, srv := newFakeGitHub(t)
 	c := newTestClient(t, srv)

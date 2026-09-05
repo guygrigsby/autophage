@@ -125,6 +125,36 @@ func TestTranslateIgnoresUnenrolledOwnAndUnsubscribed(t *testing.T) {
 	}
 }
 
+// TestLabelOnExistingCaseApproves proves the label path is not derailed by
+// the case already existing. The create it attempts first comes back as a
+// conflict, which means the case is there, so the approval must still land
+// rather than the delivery being recorded as ignored.
+func TestLabelOnExistingCaseApproves(t *testing.T) {
+	st := storetest.Open(t)
+	ctx := t.Context()
+	tr := newTranslator(st)
+	deliver(t, st, "d-inst", "installation", "installation_created.json")
+	if err := tr.ProcessPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := resolution.NewRequester("guy", resolution.AssociationOwner)
+	c, _ := resolution.NewCase("guy/repo", 7, req, t0)
+	if err := st.CreateCase(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+	deliver(t, st, "d-label", "issues", "issues_labeled.json")
+	if err := tr.ProcessPending(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if r, d := processing(t, st, "d-label"); r != "translated" {
+		t.Errorf("label on an existing case = %s %q, want translated", r, d)
+	}
+	got, err := st.GetCase(ctx, "guy/repo", 7)
+	if err != nil || len(got.Approvals()) != 1 || got.Approvals()[0].DeliveryID != "d-label" {
+		t.Errorf("approvals = %+v %v", got.Approvals(), err)
+	}
+}
+
 func TestLabelBeforeOpenCreatesThenApproves(t *testing.T) {
 	st := storetest.Open(t)
 	ctx := t.Context()
