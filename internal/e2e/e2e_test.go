@@ -226,11 +226,12 @@ func TestEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	logs := &logRecorder{t: t}
 	runner := &agent.Runner{
 		Store:  st,
 		GitHub: gh,
 		Sandbox: &sandbox.Manager{Podman: podmanBin, Image: image, WorkspacesDir: t.TempDir(), Memory: "2g", CPUs: "2", Pids: 512,
-			BotName: "autophage[bot]", BotEmail: "autophage[bot]@users.noreply.github.com", Logf: t.Logf},
+			BotName: "autophage[bot]", BotEmail: "autophage[bot]@users.noreply.github.com", Logf: logs.logf},
 		AttemptModel:  "scripted/auto",
 		ApprovedModel: "scripted/approved",
 		TriageModel:   "scripted/triage",
@@ -238,7 +239,7 @@ func TestEndToEnd(t *testing.T) {
 		Clock:         clock,
 		// The bare repository stands in for https://github.com/<repo>.git.
 		CloneURL:      func(string) string { return bare },
-		Logf:          t.Logf,
+		Logf:          logs.logf,
 		Metrics:       api.RunnerMetrics{},
 		ModelOverride: scriptedModel(t),
 	}
@@ -357,9 +358,40 @@ func TestEndToEnd(t *testing.T) {
 	}
 
 	// Nothing the run minted may reach a log line the operator reads.
-	if len(fake.mintedTokens()) == 0 {
-		t.Error("no installation token was minted, so the run did not reach GitHub")
+	minted := fake.mintedTokens()
+	if len(minted) == 0 {
+		t.Fatal("no installation token was minted, so the assertion below proves nothing")
 	}
+	for _, line := range logs.all() {
+		for _, token := range minted {
+			if strings.Contains(line, token) {
+				t.Errorf("a minted installation token reached the log: %q", line)
+			}
+		}
+	}
+}
+
+// logRecorder keeps every line the daemon's own components log, so the test
+// can read them back. The runner, the sandbox and the test's own goroutine
+// all write to it, so it locks; every line still reaches the test log.
+type logRecorder struct {
+	t     *testing.T
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *logRecorder) logf(format string, args ...any) {
+	line := fmt.Sprintf(format, args...)
+	l.mu.Lock()
+	l.lines = append(l.lines, line)
+	l.mu.Unlock()
+	l.t.Log(line)
+}
+
+func (l *logRecorder) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.lines...)
 }
 
 // mintOperatorToken takes the operator token the way the CLI does, over the
