@@ -4,7 +4,7 @@
 
 SHELL := /bin/bash
 
-APP         ?= app
+APP         ?= autophage
 WEB_DIR     := web
 INSTALL_DIR ?= $(HOME)/.local/bin
 LAUNCHD_LABEL := dev.grigsby.$(APP)d
@@ -35,17 +35,17 @@ web-build: $(WEB_DIR)/node_modules ## Build the SPA into web/dist
 	cd $(WEB_DIR) && npm run build
 	@touch $(WEB_DIR)/dist/.gitkeep
 
-server-build: ## Build the appd daemon (embeds web/dist)
-	go build -o $(APP)d ./cmd/appd
+server-build: ## Build the autophaged daemon (embeds web/dist)
+	go build -o $(APP)d ./cmd/autophaged
 
 cli-build: ## Build the app CLI
-	go build -o $(APP) ./cmd/app
+	go build -o $(APP) ./cmd/autophage
 
 build: server-build cli-build ## Build both binaries (+ SPA when web/ is present)
 	@if [ -n "$(HAS_WEB)" ]; then $(MAKE) web-build; fi
 
-server-dev: ## Run appd from source
-	go run ./cmd/appd
+server-dev: ## Run autophaged from source
+	go run ./cmd/autophaged
 
 server-test: ## Run Go tests
 	go test ./...
@@ -69,26 +69,26 @@ install: build ## Install both binaries to INSTALL_DIR
 	cp $(APP)d $(APP) $(INSTALL_DIR)/
 	@echo "✓ installed $(APP)d, $(APP) to $(INSTALL_DIR)"
 
-install-launchd: install ## Install + load the appd LaunchAgent (macOS)
+install-launchd: install ## Install + load the autophaged LaunchAgent (macOS)
 	@mkdir -p $(HOME)/Library/LaunchAgents $(HOME)/.logs/$(APP)
 	@sed -e "s|{{INSTALL_DIR}}|$(INSTALL_DIR)|g" -e "s|{{HOME}}|$(HOME)|g" \
 		deploy/$(LAUNCHD_LABEL).plist.template > $(LAUNCHD_PLIST)
 	@echo "✓ wrote $(LAUNCHD_PLIST)"
 	@echo "  Load:   launchctl load $(LAUNCHD_PLIST)"
 
-uninstall-launchd: ## Unload + remove the appd LaunchAgent
+uninstall-launchd: ## Unload + remove the autophaged LaunchAgent
 	@if [ -f $(LAUNCHD_PLIST) ]; then \
 		launchctl unload $(LAUNCHD_PLIST) 2>/dev/null || true; \
 		rm $(LAUNCHD_PLIST); echo "✓ removed $(LAUNCHD_PLIST)"; \
 	else echo "no plist at $(LAUNCHD_PLIST)"; fi
 
-service-restart: ## Rebuild, reinstall, kickstart appd in place
+service-restart: ## Rebuild, reinstall, kickstart autophaged in place
 	@$(MAKE) install
 	@if launchctl list | awk '{print $$3}' | grep -qx "$(LAUNCHD_LABEL)"; then \
 		launchctl kickstart -k gui/$$(id -u)/$(LAUNCHD_LABEL) && echo "✓ kickstarted $(LAUNCHD_LABEL)"; \
 	else echo "$(LAUNCHD_LABEL) not loaded; run 'make install-launchd' first"; exit 1; fi
 
-redeploy: ## Stop appd, install fresh binary, start it back up (clean swap)
+redeploy: ## Stop autophaged, install fresh binary, start it back up (clean swap)
 	@if [ ! -f $(LAUNCHD_PLIST) ]; then echo "run 'make install-launchd' first"; exit 1; fi
 	@launchctl bootout gui/$$(id -u)/$(LAUNCHD_LABEL) 2>/dev/null || true
 	@$(MAKE) install
@@ -97,7 +97,7 @@ redeploy: ## Stop appd, install fresh binary, start it back up (clean swap)
 	@launchctl bootstrap gui/$$(id -u) $(LAUNCHD_PLIST)
 	@echo "✓ redeployed $(LAUNCHD_LABEL)"
 
-dev: ## Run appd watcher + Vite together (both hot-reload)
+dev: ## Run autophaged watcher + Vite together (both hot-reload)
 	@trap 'kill 0' EXIT INT TERM; \
 	  scripts/dev-watch.sh & \
 	  $(MAKE) web-dev & \

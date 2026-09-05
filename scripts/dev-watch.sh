@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Backend dev loop: build appd, run it, rebuild + bounce on changes under
+# Backend dev loop: build autophaged, run it, rebuild + bounce on changes under
 # cmd/ or internal/ or *.go at the root. macOS-portable; polls mtimes every
 # 2s, no fswatch/entr needed. Logs to /tmp/app-dev.log.
 set -euo pipefail
@@ -11,7 +11,7 @@ PID_FILE="/tmp/app-dev.pid"
 cd "$ROOT"
 
 build() {
-  if go build -o appd ./cmd/appd >>"$LOG" 2>&1; then return 0; fi
+  if go build -o autophaged ./cmd/autophaged >>"$LOG" 2>&1; then return 0; fi
   echo "BUILD FAILED — keeping previous binary running" | tee -a "$LOG" >&2
   return 1
 }
@@ -25,7 +25,7 @@ stop() {
 }
 
 start() {
-  ./appd >>"$LOG" 2>&1 &
+  ./autophaged >>"$LOG" 2>&1 &
   echo $! >"$PID_FILE"
 }
 
@@ -34,7 +34,7 @@ trap 'stop; exit 0' EXIT INT TERM
 snapshot() { find cmd internal *.go -name '*.go' -exec stat -f '%m %N' {} + 2>/dev/null | sort; }
 
 build && start
-echo "dev-watch: appd running (logs: $LOG)" >&2
+echo "dev-watch: autophaged running (logs: $LOG)" >&2
 last="$(snapshot)"
 while true; do
   sleep 2

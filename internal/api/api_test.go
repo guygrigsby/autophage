@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/guygrigsby/rookery/internal/auth"
+	"github.com/guygrigsby/autophage/internal/auth"
 )
 
 func TestHealthz(t *testing.T) {

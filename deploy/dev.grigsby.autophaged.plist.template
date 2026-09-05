@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>dev.grigsby.appd</string>
+  <string>dev.grigsby.autophaged</string>
 
   <key>ProgramArguments</key>
   <array>
-    <string>{{INSTALL_DIR}}/appd</string>
+    <string>{{INSTALL_DIR}}/autophaged</string>
   </array>
 
   <key>RunAtLoad</key>
@@ -20,10 +20,10 @@
   </dict>
 
   <key>StandardOutPath</key>
-  <string>{{HOME}}/.logs/app/appd-launchd.log</string>
+  <string>{{HOME}}/.logs/autophage/autophaged-launchd.log</string>
 
   <key>StandardErrorPath</key>
-  <string>{{HOME}}/.logs/app/appd-launchd.log</string>
+  <string>{{HOME}}/.logs/autophage/autophaged-launchd.log</string>
 
   <key>WorkingDirectory</key>
   <string>{{HOME}}</string>

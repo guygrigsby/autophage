@@ -1,4 +1,4 @@
-// Package api builds appd's HTTP handler: liveness, loopback token mint, an
+// Package api builds autophaged's HTTP handler: liveness, loopback token mint, an
 // auth-gated whoami, and (optionally) the embedded web SPA.
 package api
 
@@ -7,11 +7,11 @@ import (
 	"io/fs"
 	"net/http"
 
-	rootapp "github.com/guygrigsby/rookery"
-	"github.com/guygrigsby/rookery/internal/auth"
+	rootapp "github.com/guygrigsby/autophage"
+	"github.com/guygrigsby/autophage/internal/auth"
 )
 
-// New returns the appd handler. dir is the per-app config dir (where the auth
+// New returns the autophaged handler. dir is the per-app config dir (where the auth
 // hash lives). static is the embedded SPA filesystem; pass nil (or an FS with
 // no index.html) to serve no web UI.
 func New(dir string, static fs.FS) http.Handler {

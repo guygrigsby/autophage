@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "autophage",
+  "project_id": "d8b490c1-23e7-4412-b892-80e860d56b9e"
+}

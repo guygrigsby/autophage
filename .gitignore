@@ -1,6 +1,6 @@
 # Build artifacts
-/appd
-/app
+/autophaged
+/autophage
 /bin/
 # Built web assets (the dir is kept by web/dist/.gitkeep; assets are not committed)
 /web/dist/*
@@ -8,3 +8,8 @@
 /web/node_modules/
 # beads local db
 /.beads/*.db
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key

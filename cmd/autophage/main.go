@@ -1,4 +1,4 @@
-// The rookery CLI client; it talks to a running appd.
+// The rookery CLI client; it talks to a running autophaged.
 package main
 
 import (
@@ -10,12 +10,12 @@ import (
 )
 
 // appID is the program id perch uses for env-var and config-path derivation.
-const appID = "app"
+const appID = "autophage"
 
 var cliFlags *client.Flags
 
 func newRootCmd() *cobra.Command {
-	root, f := client.Root(appID, "app CLI", "Talks to a running daemon.", "http://127.0.0.1:8080")
+	root, f := client.Root(appID, "autophage CLI", "Talks to a running daemon.", "http://127.0.0.1:8080")
 	cliFlags = f
 	root.AddCommand(newAuthCmd(), newWhoamiCmd())
 	return root
