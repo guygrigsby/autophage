@@ -1,0 +1,60 @@
+package store
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// ErrNotFound is returned when a row the caller named does not exist.
+var ErrNotFound = errors.New("not found")
+
+// Store is a connected, migrated database.
+type Store struct {
+	pool *pgxpool.Pool
+}
+
+// Open connects to dsn, applies migrations and returns the store.
+func Open(ctx context.Context, dsn string) (*Store, error) {
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("store: connect: %w", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("store: ping: %w", err)
+	}
+	if err := migrate(ctx, pool); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return &Store{pool: pool}, nil
+}
+
+// Pool exposes the pool for readers that need it (the jess ledger shares it).
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
+func (s *Store) Close() { s.pool.Close() }
+
+// tx runs fn in a transaction, committing on nil and rolling back otherwise.
+func (s *Store) tx(ctx context.Context, fn func(pgx.Tx) error) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback(ctx)
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// notify issues pg_notify on the autophage_events channel inside tx, so the
+// wake-up is delivered exactly when the change commits.
+func notify(ctx context.Context, tx pgx.Tx, payload string) error {
+	_, err := tx.Exec(ctx, "select pg_notify('autophage_events', $1)", payload)
+	return err
+}
