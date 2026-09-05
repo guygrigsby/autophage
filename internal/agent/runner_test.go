@@ -50,7 +50,11 @@ type fakeSandbox struct {
 	// during setup. preparing is closed when that Prepare is entered.
 	blockPrepare bool
 	preparing    chan struct{}
-	diff         int
+	// onDiff runs at the top of DiffLines. RunAttempt takes its final count
+	// there, so a test can land a shutdown in the window between the run
+	// ending and the runner deciding what its outcome is.
+	onDiff func()
+	diff   int
 }
 
 func (f *fakeSandbox) record(call string) {
@@ -73,7 +77,11 @@ func (f *fakeSandbox) Prepare(ctx context.Context, repo, cloneURL, branch, def, 
 	if f.blockPrepare {
 		close(f.preparing)
 		<-ctx.Done()
-		return sandbox.Workspace{}, ctx.Err()
+		// Not ctx.Err(): the real manager runs git and podman through
+		// os/exec, which reports the *ExitError of the process it killed in
+		// preference to the context's own error, so a cancelled step almost
+		// never hands back something that unwraps to context.Canceled.
+		return sandbox.Workspace{}, errors.New("git clone: signal: killed")
 	}
 	f.mu.Lock()
 	f.calls = append(f.calls, "prepare")
@@ -102,6 +110,9 @@ func (f *fakeSandbox) Tools(context.Context, sandbox.Container) ([]ac.Tool, io.C
 }
 
 func (f *fakeSandbox) DiffLines(context.Context, sandbox.Container, string) (int, error) {
+	if f.onDiff != nil {
+		f.onDiff()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "diff")
@@ -745,6 +756,84 @@ func TestRunnerShutdownLeavesTheAttemptOpen(t *testing.T) {
 	}
 	if got := m.all(); len(got) != 0 {
 		t.Errorf("metrics = %v", got)
+	}
+}
+
+// A shutdown during setup is the same contract as one during the run: no
+// outcome, and the attempt is left for app.Recovery.
+func TestRunnerShutdownDuringSetupLeavesTheAttemptOpen(t *testing.T) {
+	st := storetest.Open(t)
+	id := startedAttempt(t, st, resolution.Auto)
+	sb := &fakeSandbox{blockPrepare: true, preparing: make(chan struct{})}
+	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
+	r, m, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { r.Run(ctx, id); close(done) }()
+	select {
+	case <-sb.preparing:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the workspace was never prepared")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not end after the daemon context was cancelled")
+	}
+	c, err := st.GetCase(t.Context(), "guy/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := c.OpenAttempt()
+	if a == nil || a.ID != id || c.State() != resolution.Attempting {
+		t.Errorf("a shutdown during setup ended the attempt: state %s open attempt %+v", c.State(), a)
+	}
+	if got := m.all(); len(got) != 0 {
+		t.Errorf("metrics = %v", got)
+	}
+}
+
+// A run that finished on its own terms keeps its outcome even when the
+// daemon starts going down before the push: the work and the tokens are real
+// either way, and app.Recovery would otherwise re-queue a case that is done.
+func TestRunnerShutdownAfterTheRunRecordsTheOutcome(t *testing.T) {
+	st := storetest.Open(t)
+	id := startedAttempt(t, st, resolution.Auto)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	// The daemon goes down inside the run's own final diff count, the
+	// window between the run ending and the runner deciding what it ended
+	// as. A live read of the caller there discards a finished run.
+	sb := &fakeSandbox{commits: true, onDiff: cancel}
+	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
+	r, m, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+	r.Run(ctx, id)
+	c, err := st.GetCase(t.Context(), "guy/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Attempts()[0].Outcome
+	if c.State() != resolution.Done || o == nil || o.Kind != resolution.PullRequestOpened {
+		t.Fatalf("a finished run lost its outcome to a shutdown: state %s outcome %+v", c.State(), o)
+	}
+	if got := m.all(); len(got) != 1 || got[0] != "auto/pull_request_opened" {
+		t.Errorf("metrics = %v", got)
+	}
+}
+
+// An empty reason must not read as "nobody asked", which is the shutdown
+// signal; a caller that forgets one gets an operator stop.
+func TestRunnerCancelWithNoReasonIsAnOperatorStop(t *testing.T) {
+	r := &Runner{}
+	_, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	slot := r.register("a1", cancel)
+	if !r.Cancel("a1", "") {
+		t.Fatal("cancel did not reach the registered attempt")
+	}
+	if got := r.reason(slot, "unset"); got != resolution.AbortOperatorStop {
+		t.Errorf("reason = %q, want %q", got, resolution.AbortOperatorStop)
 	}
 }
 

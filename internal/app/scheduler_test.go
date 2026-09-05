@@ -108,6 +108,19 @@ type silentRunner struct{ done chan struct{} }
 
 func (s silentRunner) Run(context.Context, string) { close(s.done) }
 
+// shutdownRunner is the runner's shutdown contract: the daemon goes down
+// under the attempt and nothing is recorded, so Recovery ends it with
+// Aborted{DaemonRestart} on the next boot and the case re-queues.
+type shutdownRunner struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+func (r shutdownRunner) Run(context.Context, string) {
+	r.cancel()
+	close(r.done)
+}
+
 // panickingRunner is the other half of the same hole.
 type panickingRunner struct{ done chan struct{} }
 
@@ -183,6 +196,35 @@ func TestSchedulerBackstopsASilentRunner(t *testing.T) {
 	o := waitForOutcome(t, s)
 	if o.Kind != resolution.FailedOutcome || o.Message != "runner returned without recording an outcome" {
 		t.Errorf("outcome = %+v", o)
+	}
+}
+
+// TestSchedulerBackstopStandsDownDuringShutdown pins the other side of the
+// backstop: a runner that records nothing because the daemon is going down
+// must leave the attempt open. Recording Failed{Infra} here would park a
+// case that Recovery would otherwise re-queue on the next boot.
+func TestSchedulerBackstopStandsDownDuringShutdown(t *testing.T) {
+	st := storetest.Open(t)
+	queueCases(t, st, 1)
+	gh := &fakeGitHub{issues: map[string]resolution.IssueDetail{keyOf("guy/repo", 1): issue(true)}}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	runner := shutdownRunner{cancel: cancel, done: make(chan struct{})}
+	s := &Scheduler{Store: st, Runner: runner, Concurrency: 1, Clock: fixedClock{t0}, Budgets: policy(t), GitHub: gh}
+	if err := s.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-runner.done
+	if !s.WaitTimeout(5 * time.Second) {
+		t.Fatal("runner goroutine never returned")
+	}
+	c, err := st.GetCase(t.Context(), "guy/repo", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := c.OpenAttempt()
+	if a == nil || c.State() != resolution.Attempting {
+		t.Fatalf("the backstop ended an attempt the shutdown left for recovery: state %s open attempt %+v", c.State(), a)
 	}
 }
 

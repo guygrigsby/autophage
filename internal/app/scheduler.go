@@ -135,6 +135,15 @@ func (s *Scheduler) backstop(ctx context.Context, attemptID string) {
 		message = fmt.Sprintf("runner panicked: %v", v)
 		log.Printf("attempt %s: %s\n%s", attemptID, message, debug.Stack())
 	}
+	// Stand down while the daemon is going down, after recovering the panic
+	// but before recording anything. The runner's contract is that a
+	// shutdown under a running attempt records no outcome, so Recovery can
+	// end it with Aborted{DaemonRestart} on the next boot and re-queue the
+	// case; a backstop that wrote here would spend that answer on
+	// Failed{Infra} and park the case for a human instead.
+	if ctx.Err() != nil {
+		return
+	}
 	c, err := s.Store.GetCaseByAttempt(ctx, attemptID)
 	if err != nil {
 		log.Printf("backstop attempt %s: %v", attemptID, err)

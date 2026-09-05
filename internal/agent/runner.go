@@ -25,6 +25,12 @@ import (
 const (
 	storeTimeout  = 30 * time.Second
 	githubTimeout = 60 * time.Second
+	// remintTimeout is shorter still, because the push token's re-mint sits
+	// between the run ending and the work reaching the branch. It has to
+	// leave room inside the dispatcher's 30 second shutdown wait
+	// (internal/app/dispatcher.go) for CommitAndPush to run at all, so a
+	// GitHub that hangs costs the attempt its fresh token, not its commits.
+	remintTimeout = 15 * time.Second
 )
 
 // errShutdown is what execute returns when the daemon is going down under a
@@ -104,8 +110,14 @@ func (r *Runner) Stop(attemptID string) bool {
 }
 
 // Cancel cancels a running attempt with the given reason, reporting whether
-// the attempt is running here.
+// the attempt is running here. An empty reason is an operator stop: the
+// empty slot is how the runner recognises a shutdown nobody asked for, so a
+// caller that forgets a reason must not turn its cancel into a discarded
+// outcome.
 func (r *Runner) Cancel(attemptID string, reason resolution.AbortReason) bool {
+	if reason == "" {
+		reason = resolution.AbortOperatorStop
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	run, ok := r.running[attemptID]
@@ -168,9 +180,10 @@ func (r *Runner) reason(slot *running, fallback resolution.AbortReason) resoluti
 // caller's context was done and nobody asked for this attempt to stop. It is
 // the one end that records no outcome, because an outcome here would spend
 // the case's answer on a cancellation nothing about the attempt earned.
-// callerDone is a snapshot the caller reads once rather than a live check: a
-// cancellation arriving after the attempt has already finished its work is
-// not what this decides.
+// callerDone is a snapshot execute takes before the run and refreshes only
+// when the run came back cut short, never a live check: a cancellation
+// arriving after the attempt has already done its work is not what this
+// decides.
 func (r *Runner) shuttingDown(callerDone bool, slot *running) bool {
 	return callerDone && r.reason(slot, "") == ""
 }
@@ -239,13 +252,21 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	// setup ends the attempt on a failure before the agent ran. A
 	// cancellation is not an infrastructure failure: it is the stop
 	// somebody asked for, or the daemon going down under the attempt.
+	//
+	// Which it was is decided by the context at the point of failure, never
+	// by the shape of the error. A cancelled git or podman is killed by
+	// os/exec, which reports the *ExitError of the signalled process in
+	// preference to the context's own error, so almost nothing the sandbox
+	// returns for a cancelled step unwraps to context.Canceled. The error
+	// text is kept as detail either way.
 	setup := func(step string, err error) (resolution.Outcome, error) {
-		if errors.Is(err, context.Canceled) {
+		if ctx.Err() != nil {
 			if reason := r.reason(slot, ""); reason != "" {
-				o, cerr := resolution.OutcomeAborted(reason, "The attempt was stopped during "+step+", before the agent ran.", resolution.Usage{}, r.now())
+				o, cerr := resolution.OutcomeAborted(reason, "The attempt was stopped during "+step+", before the agent ran: "+err.Error(), resolution.Usage{}, r.now())
 				return r.settled(o, cerr, resolution.Usage{}), nil
 			}
 			if caller.Err() != nil {
+				r.logf("runner %s: %s: %v", a.ID, step, err)
 				return resolution.Outcome{}, errShutdown
 			}
 		}
@@ -305,6 +326,14 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 		}
 	}
 
+	// Read the caller once here and once when the run returns, both before
+	// the push, so a shutdown arriving while the push runs changes nothing.
+	// A shutdown suppresses the attempt's outcome only when it cut the run
+	// short: a run that ended on its own terms is real work with real
+	// tokens spent, and a daemon going down a moment later must not erase
+	// what it did.
+	callerDone := caller.Err() != nil
+
 	report := RunAttempt(ctx, RunInput{
 		Model:   model,
 		Tools:   tools,
@@ -322,15 +351,16 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 			r.recordRun(ctx, c, a.ID, resolution.Run{RunID: runID, Model: modelID, BaseSha: ws.BaseSha, BeganAt: r.now()})
 		},
 	})
+	// StopCancelled with nobody having asked for a stop is the run being cut
+	// short from outside; every other stop is the run ending on its own
+	// terms and keeps its outcome whatever the daemon does next.
+	if report.Stop == StopCancelled {
+		callerDone = callerDone || caller.Err() != nil
+	}
 	summary := report.Summary
 	if summary == "" {
 		summary = "The agent produced no summary."
 	}
-
-	// Read once, before the work below: a shutdown that arrives while the
-	// push is running must not change an answer for an attempt that has
-	// already finished everything it was going to do.
-	callerDone := caller.Err() != nil
 
 	// Mint again for the push. An installation token lives an hour at most
 	// (github.Client.MintToken) and an approved attempt's wall clock is
@@ -342,7 +372,7 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	// still leaves commits worth keeping, and CommitAndPush is what ends
 	// the agent phase on the workspace.
 	pushCtx := context.WithoutCancel(ctx)
-	mintCtx, cancelMint := context.WithTimeout(pushCtx, githubTimeout)
+	mintCtx, cancelMint := context.WithTimeout(pushCtx, remintTimeout)
 	fresh, mintErr := r.GitHub.MintToken(mintCtx, repo)
 	cancelMint()
 	pushToken := token
