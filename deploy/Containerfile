@@ -20,14 +20,21 @@ ARG GO_VERSION=1.26.5
 ARG NODE_MAJOR=22
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl git make gcc g++ libc6-dev pkg-config \
-      python3 python3-venv python3-pip xz-utils \
+      ca-certificates curl git make gcc g++ libc6-dev pkg-config xz-utils \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz
 RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/* \
     && corepack enable
-RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+# Debian bookworm's apt-get python3 is 3.11; get 3.12 from uv's own managed
+# interpreters instead (a self-contained build, no extra apt source needed)
+# and put it on PATH as the system python3.
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
+    && export UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+    && uv python install 3.12 \
+    && ln -sf "$(uv python find 3.12)" /usr/local/bin/python3 \
+    && ln -sf /usr/local/bin/python3 /usr/local/bin/python3.12 \
+    && chmod -R a+rX /opt/uv/python
 COPY --from=toolbox /out/autophage-toolbox /usr/local/bin/autophage-toolbox
 COPY autophage/deploy/warm-deps /usr/local/bin/warm-deps
 RUN chmod 0755 /usr/local/bin/warm-deps /usr/local/bin/autophage-toolbox \
