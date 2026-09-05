@@ -35,6 +35,19 @@ func TestNewRequesterRefusesBadInput(t *testing.T) {
 	}
 }
 
+func TestNewRequesterNormalizesAssociation(t *testing.T) {
+	r, err := NewRequester("alice", Association("OWNER"))
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if r.Trust != Trusted {
+		t.Errorf("trust = %s, want %s", r.Trust, Trusted)
+	}
+	if r.Association != AssociationOwner {
+		t.Errorf("association = %s, want %s", r.Association, AssociationOwner)
+	}
+}
+
 func TestParseAssociationFromGitHubCasing(t *testing.T) {
 	a, err := ParseAssociation("FIRST_TIME_CONTRIBUTOR")
 	if err != nil || a != AssociationFirstTimeContributor {
