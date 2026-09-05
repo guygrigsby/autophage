@@ -17,11 +17,13 @@ import (
 	"github.com/guygrigsby/perch/daemon"
 
 	rootapp "github.com/guygrigsby/autophage"
+	"github.com/guygrigsby/autophage/internal/agent"
 	"github.com/guygrigsby/autophage/internal/api"
 	"github.com/guygrigsby/autophage/internal/app"
 	appconfig "github.com/guygrigsby/autophage/internal/config"
 	"github.com/guygrigsby/autophage/internal/github"
 	"github.com/guygrigsby/autophage/internal/resolution"
+	"github.com/guygrigsby/autophage/internal/sandbox"
 	"github.com/guygrigsby/autophage/internal/store"
 )
 
@@ -75,7 +77,20 @@ func main() {
 		log.Fatalf("ledger: %v", err)
 	}
 	clock := resolution.SystemClock{}
-	runner := newRunner(ctx, st, gh, pg, cfg, secrets)
+	runner := &agent.Runner{
+		Store:  st,
+		GitHub: gh,
+		Sandbox: &sandbox.Manager{Image: cfg.Sandbox.Image, WorkspacesDir: expandHome(cfg.Sandbox.WorkspacesDir), Memory: "4g", CPUs: "4", Pids: 512,
+			BotName: cfg.GitHub.BotLogin, BotEmail: strings.TrimSuffix(cfg.GitHub.BotLogin, "[bot]") + "[bot]@users.noreply.github.com", Logf: log.Printf},
+		Models:        agent.Models{Key: secrets.OpenRouterKey, Title: "autophage"},
+		AttemptModel:  cfg.Model.Auto.Model,
+		ApprovedModel: cfg.Model.Approved.Model,
+		TriageModel:   cfg.Model.Triage.Model,
+		Ledger:        pg,
+		Clock:         clock,
+		Logf:          log.Printf,
+		Metrics:       api.RunnerMetrics{},
+	}
 	dispatcher := &app.Dispatcher{
 		Store:      st,
 		Translator: &github.Translator{Store: st, Clock: clock, ApprovedLabel: cfg.Label.Approved, BotLogin: cfg.GitHub.BotLogin},
@@ -84,6 +99,7 @@ func main() {
 		Commenter:  &app.Commenter{Store: st, GitHub: gh, Label: cfg.Label.Approved},
 		Enrollment: &app.Enrollment{Store: st, GitHub: gh, Label: cfg.Label.Approved},
 		Recovery:   &app.Recovery{Store: st, Clock: clock},
+		Canceller:  runner,
 	}
 
 	handler := api.New(dir, rootapp.Static(), api.Deps{

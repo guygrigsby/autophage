@@ -163,6 +163,27 @@ func (s *Store) OpenAttempts(ctx context.Context) ([]OpenAttempt, error) {
 	return out, rows.Err()
 }
 
+// OpenAttemptsOnClosedCases lists open attempts whose case is Closed, so the
+// dispatcher can cancel them.
+func (s *Store) OpenAttemptsOnClosedCases(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `select a.id from attempts a join cases c on c.id = a.case_id
+		left join attempt_outcomes o on o.attempt_id = a.id
+		where o.attempt_id is null and c.state = 'closed'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) CountByState(ctx context.Context) (map[string]int, error) {
 	rows, err := s.pool.Query(ctx, `select state, count(*) from cases group by state`)
 	if err != nil {

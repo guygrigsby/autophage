@@ -159,6 +159,52 @@ func TestDispatcherFloorRetriesAFailedPost(t *testing.T) {
 	d.Scheduler.Wait()
 }
 
+// fakeCanceller records the attempts it was asked to cancel and why.
+type fakeCanceller struct {
+	mu     sync.Mutex
+	cancel []string
+}
+
+func (f *fakeCanceller) Cancel(id string, reason resolution.AbortReason) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancel = append(f.cancel, id+":"+string(reason))
+	return true
+}
+
+// TestSweepCancelsAttemptsOfClosedCases proves the dispatcher's cancel step
+// finds an attempt still open under a case the issue-closed webhook already
+// closed, and cancels it with AbortIssueClosed through the Canceller.
+func TestSweepCancelsAttemptsOfClosedCases(t *testing.T) {
+	st := storetest.Open(t)
+	queueCases(t, st, 1)
+	b, _ := resolution.NewBudget(10, time.Hour, 500)
+	c, _ := st.UpdateCase(t.Context(), "guy/repo", 1, func(c *resolution.Case) error {
+		_, err := c.StartAttempt(resolution.Auto, b, "brief", t0)
+		return err
+	})
+	id := c.OpenAttempt().ID
+	if err := st.StoreDeliveryForTest(t.Context(), "d-close"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateCase(t.Context(), "guy/repo", 1, func(c *resolution.Case) error {
+		return c.Close(resolution.Closure{DeliveryID: "d-close", ClosedAt: t0})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fc := &fakeCanceller{}
+	gh := &fakeGitHub{issues: map[string]resolution.IssueDetail{}}
+	d := &Dispatcher{Store: st, Translator: &github.Translator{Store: st, Clock: fixedClock{t0}, ApprovedLabel: "approved", BotLogin: "b"},
+		Triage:    &Triage{Store: st, Triager: fakeTriager{size: resolution.Small}, GitHub: gh, Clock: fixedClock{t0}},
+		Scheduler: &Scheduler{Store: st, Runner: &fakeRunner{release: make(chan struct{})}, Concurrency: 1, Clock: fixedClock{t0}, Budgets: policy(t), GitHub: gh},
+		Commenter: &Commenter{Store: st, GitHub: gh, Label: "approved"}, Enrollment: &Enrollment{Store: st, GitHub: gh, Label: "approved"},
+		Recovery: &Recovery{Store: st, Clock: fixedClock{t0}}, Canceller: fc}
+	d.Sweep(t.Context())
+	if len(fc.cancel) != 1 || fc.cancel[0] != id+":issue_closed" {
+		t.Errorf("cancel = %v", fc.cancel)
+	}
+}
+
 // waitFor polls cond until it holds or the test gives up.
 func waitFor(t *testing.T, cond func() bool, what string) {
 	t.Helper()

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/guygrigsby/autophage/internal/github"
+	"github.com/guygrigsby/autophage/internal/resolution"
 	"github.com/guygrigsby/autophage/internal/store"
 )
 
@@ -22,6 +23,11 @@ const defaultFloor = 60 * time.Second
 // that have not returned.
 const shutdownWait = 30 * time.Second
 
+// Canceller cancels a running attempt; the runner implements it.
+type Canceller interface {
+	Cancel(attemptID string, reason resolution.AbortReason) bool
+}
+
 // Dispatcher runs recovery once, sweeps every service, then sweeps again on
 // every store notification and at least once per Floor. Sweeps never
 // overlap; wake-ups that arrive during a sweep coalesce into one more.
@@ -33,6 +39,10 @@ type Dispatcher struct {
 	Commenter  *Commenter
 	Enrollment *Enrollment
 	Recovery   *Recovery
+	// Canceller cancels the attempt of a case the issue-closed webhook
+	// closed out from under it. Nil disables the step, which the tests that
+	// do not care about it rely on.
+	Canceller Canceller
 	// Floor is the cadence that makes every "will retry" true. Zero means
 	// defaultFloor.
 	Floor time.Duration
@@ -119,6 +129,7 @@ func (d *Dispatcher) Sweep(ctx context.Context) {
 		run  func(context.Context) error
 	}{
 		{"translate", d.Translator.ProcessPending},
+		{"cancel", d.cancelClosed},
 		{"enroll", d.Enrollment.Run},
 		{"triage", d.Triage.Run},
 		{"comment", d.Commenter.Run},
@@ -129,4 +140,23 @@ func (d *Dispatcher) Sweep(ctx context.Context) {
 			log.Printf("sweep %s: %v", s.name, err)
 		}
 	}
+}
+
+// cancelClosed cancels every open attempt whose case has been closed out
+// from under it. A closed case cannot ever run again, so an attempt left
+// running would spend turns and tokens on an outcome nothing will read.
+func (d *Dispatcher) cancelClosed(ctx context.Context) error {
+	if d.Canceller == nil {
+		return nil
+	}
+	ids, err := d.Store.OpenAttemptsOnClosedCases(ctx)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if !d.Canceller.Cancel(id, resolution.AbortIssueClosed) {
+			log.Printf("cancel %s: not running here", id)
+		}
+	}
+	return nil
 }
