@@ -14,8 +14,13 @@ func TestListenReceivesCaseNotifications(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	got := make(chan string, 8)
-	go func() { _ = s.Listen(ctx, func(p string) { got <- p }) }()
-	time.Sleep(200 * time.Millisecond)
+	ready := make(chan struct{})
+	go func() { _ = s.Listen(ctx, func() { close(ready) }, func(p string) { got <- p }) }()
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("listen never became ready")
+	}
 	newCase(t, s, 7, owner(t))
 	select {
 	case p := <-got:

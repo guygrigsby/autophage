@@ -11,10 +11,12 @@ import (
 )
 
 // Commenter fills the outbox from facts that need a comment and posts what
-// is unposted. Both halves are idempotent.
+// is unposted. Both halves are idempotent. Label is the approval label named
+// in the comment bodies' call to action.
 type Commenter struct {
 	Store  *store.Store
 	GitHub resolution.GitHub
+	Label  string
 }
 
 func (m *Commenter) Run(ctx context.Context) error {
@@ -67,7 +69,7 @@ func (m *Commenter) enqueueTriage(ctx context.Context, k store.CaseKey) error {
 	if err != nil {
 		return err
 	}
-	return m.Store.EnqueueTriageComment(ctx, c.ID(), TriageBody(*c.Triage()))
+	return m.Store.EnqueueTriageComment(ctx, c.ID(), TriageBody(*c.Triage(), m.Label))
 }
 
 func (m *Commenter) enqueueOutcome(ctx context.Context, attemptID string) error {
@@ -77,19 +79,19 @@ func (m *Commenter) enqueueOutcome(ctx context.Context, attemptID string) error 
 	}
 	for _, a := range c.Attempts() {
 		if a.ID == attemptID {
-			return m.Store.EnqueueOutcomeComment(ctx, attemptID, OutcomeBody(c, a))
+			return m.Store.EnqueueOutcomeComment(ctx, attemptID, OutcomeBody(c, a, m.Label))
 		}
 	}
 	return nil
 }
 
 // TriageBody is the comment for a Large triage.
-func TriageBody(t resolution.Triage) string {
-	return fmt.Sprintf("autophage sized this issue **large** and will not start on its own.\n\n%s\n\nAdd the `approved` label to have autophage attempt it.", t.Rationale)
+func TriageBody(t resolution.Triage, label string) string {
+	return fmt.Sprintf("autophage sized this issue **large** and will not start on its own.\n\n%s\n\nAdd the `%s` label to have autophage attempt it.", t.Rationale, label)
 }
 
 // OutcomeBody is the comment for an exhausted, failed or stopped attempt.
-func OutcomeBody(c *resolution.Case, a resolution.Attempt) string {
+func OutcomeBody(c *resolution.Case, a resolution.Attempt, label string) string {
 	o := a.Outcome
 	var head string
 	switch o.Kind {
@@ -103,5 +105,5 @@ func OutcomeBody(c *resolution.Case, a resolution.Attempt) string {
 		head = fmt.Sprintf("autophage attempt %d ended: %s.", a.Ordinal, o.Kind)
 	}
 	usage := fmt.Sprintf("Used %d turns, %s, %d diff lines.", o.Usage.Turns, o.Usage.WallClock.Round(1e9), o.Usage.DiffLines)
-	return fmt.Sprintf("%s\n\n%s\n\n%s\n\nAdd the `approved` label to run again with the larger budget.", head, o.Summary, usage)
+	return fmt.Sprintf("%s\n\n%s\n\n%s\n\nAdd the `%s` label to run again with the larger budget.", head, o.Summary, usage, label)
 }

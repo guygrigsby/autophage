@@ -18,7 +18,7 @@ func TestCommenterPostsTriageAndOutcomeOnceEach(t *testing.T) {
 		t.Fatal(err)
 	}
 	gh := &fakeGitHub{failPost: true}
-	cm := &Commenter{Store: st, GitHub: gh}
+	cm := &Commenter{Store: st, GitHub: gh, Label: "approved"}
 	if err := cm.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
