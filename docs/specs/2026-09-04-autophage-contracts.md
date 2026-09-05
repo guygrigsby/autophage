@@ -57,7 +57,7 @@ Not endpoints, but the seams the adapters implement. All in Resolution's types.
 | `GitHub` | `PostComment(repository, number, body) (githubCommentID, error)` | | Honors `Retry-After`; retried by the outbox poster |
 | `GitHub` | `OpenPullRequest(repository, head, base, title, body) (prNumber, error)` | | Body carries `Fixes #<number>` |
 | `GitHub` | `EnsureLabel(repository, name) error` | | Idempotent on GitHub's side |
-| `Sandbox` | `Prepare(repository, branch, defaultBranch, token) (Workspace{path, baseSha}, error)` | `internal/sandbox` | Clone or fetch, rebase branch onto default, warm deps in the prep container |
+| `Sandbox` | `Prepare(repository, branch, defaultBranch, token) (Workspace{path, baseSha}, error)` | `internal/sandbox` (port and adapter; the port's types are tools and containers, not domain types) | Clone or fetch, rebase branch onto default, warm deps in the prep container |
 | `Sandbox` | `Start(workspace) (Container, error)` | | Agent container, no network, hardened |
 | `Sandbox` | `Tools(container) ([]Tool, closer, error)` | | Dial the toolbox over `podman exec -i`, adapt via `jess/mcp` |
 | `Sandbox` | `DiffLines(container, baseSha) (int, error)` | | `git diff --shortstat` inside the container |
@@ -65,6 +65,8 @@ Not endpoints, but the seams the adapters implement. All in Resolution's types.
 | `Sandbox` | `Teardown(container) error` | | |
 | `Agent` | `Run(ctx, brief, tools, budget, hooks) (RunReport{runId, usage, finalSummary, stop Limit or none}, error)` | `internal/agent` | Builds one jess agent; wires steers at `Budget.WarnAt()`; forces the summary turn; `hooks.AfterTool` lets the runner check `DiffLines` |
 | `Triager` | `Classify(title, body) (Size, rationale, model, error)` | `internal/agent` | Structured output; one model call on the triage tier |
+
+The Sandbox and Agent ports are declared beside their adapters rather than in `internal/resolution`: their signatures carry tools and containers, which are not domain types. Resolution never calls them; the runner does.
 
 ## Domain events
 
