@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -32,18 +33,24 @@ var (
 // every call is recorded in order so the test can prove CommitAndPush ran
 // before the container was torn down and before the toolbox closer closed.
 type fakeSandbox struct {
-	mu        sync.Mutex
-	calls     []string
-	prepared  []string
-	started   []string
-	torn      []string
-	tornRepos []string
-	pushed    []string
-	commits   bool
-	failStart bool
-	failTools bool
-	failPush  error
-	diff      int
+	mu         sync.Mutex
+	calls      []string
+	prepared   []string
+	started    []string
+	torn       []string
+	tornRepos  []string
+	pushed     []string
+	pushTokens []string
+	commits    bool
+	failStart  bool
+	failTools  bool
+	failPush   error
+	noPush     bool
+	// blockPrepare holds Prepare until its context ends, so a stop can land
+	// during setup. preparing is closed when that Prepare is entered.
+	blockPrepare bool
+	preparing    chan struct{}
+	diff         int
 }
 
 func (f *fakeSandbox) record(call string) {
@@ -59,9 +66,14 @@ func (f *fakeSandbox) order() []string {
 	return append([]string(nil), f.calls...)
 }
 
-func (f *fakeSandbox) Prepare(_ context.Context, repo, cloneURL, branch, def, token string) (sandbox.Workspace, error) {
+func (f *fakeSandbox) Prepare(ctx context.Context, repo, cloneURL, branch, def, token string) (sandbox.Workspace, error) {
 	if token == "" {
 		return sandbox.Workspace{}, errors.New("no token")
+	}
+	if f.blockPrepare {
+		close(f.preparing)
+		<-ctx.Done()
+		return sandbox.Workspace{}, ctx.Err()
 	}
 	f.mu.Lock()
 	f.calls = append(f.calls, "prepare")
@@ -96,18 +108,20 @@ func (f *fakeSandbox) DiffLines(context.Context, sandbox.Container, string) (int
 	return f.diff, nil
 }
 
-func (f *fakeSandbox) CommitAndPush(_ context.Context, ws sandbox.Workspace, _, msg string) (string, bool, error) {
+func (f *fakeSandbox) CommitAndPush(_ context.Context, ws sandbox.Workspace, token, msg string) (string, bool, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, "push")
 	f.pushed = append(f.pushed, msg)
+	f.pushTokens = append(f.pushTokens, token)
 	f.mu.Unlock()
 	if f.failPush != nil {
 		return "", false, f.failPush
 	}
+	head := ws.BaseSha
 	if f.commits {
-		return headSha, true, nil
+		head = headSha
 	}
-	return ws.BaseSha, true, nil
+	return head, !f.noPush, nil
 }
 
 func (f *fakeSandbox) Teardown(_ context.Context, c sandbox.Container) error {
@@ -131,6 +145,7 @@ func (c recordCloser) Close() error {
 type fakeGitHub struct {
 	mu     sync.Mutex
 	prs    []string
+	minted []string
 	issue  resolution.IssueDetail
 	branch string // DefaultBranch answer; empty means the enrolled one
 	prErr  error
@@ -147,8 +162,14 @@ func (g *fakeGitHub) DefaultBranch(_ context.Context, repo resolution.Repository
 	return g.branch, nil
 }
 
+// MintToken hands out a distinct value per call, so a caller that reuses an
+// earlier token instead of minting a fresh one is visible in what it pushed.
 func (g *fakeGitHub) MintToken(context.Context, resolution.Repository) (resolution.Token, error) {
-	return resolution.Token{Value: "tok", ExpiresAt: t0.Add(time.Hour)}, nil
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	value := fmt.Sprintf("tok-%d", len(g.minted)+1)
+	g.minted = append(g.minted, value)
+	return resolution.Token{Value: value, ExpiresAt: t0.Add(time.Hour)}, nil
 }
 
 func (g *fakeGitHub) PostComment(context.Context, string, int, string) (int64, error) { return 1, nil }
@@ -171,6 +192,12 @@ func (g *fakeGitHub) pullRequests() []string {
 	return append([]string(nil), g.prs...)
 }
 
+func (g *fakeGitHub) tokens() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.minted...)
+}
+
 type countMetrics struct {
 	mu    sync.Mutex
 	ended []string
@@ -186,6 +213,46 @@ func (m *countMetrics) all() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]string(nil), m.ended...)
+}
+
+// logRecorder keeps every line the runner logs so a test can prove no minted
+// token reached one. The runner's goroutine and the agent's both log, so it
+// locks.
+type logRecorder struct {
+	t     *testing.T
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *logRecorder) logf(format string, args ...any) {
+	line := fmt.Sprintf(format, args...)
+	l.mu.Lock()
+	l.lines = append(l.lines, line)
+	l.mu.Unlock()
+	l.t.Log(line)
+}
+
+func (l *logRecorder) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.lines...)
+}
+
+// assertNoTokenLogged proves no installation token the run minted was
+// written to the log.
+func assertNoTokenLogged(t *testing.T, logs *logRecorder, gh *fakeGitHub) {
+	t.Helper()
+	tokens := gh.tokens()
+	if len(tokens) == 0 {
+		t.Fatal("nothing was minted, so the assertion proves nothing")
+	}
+	for _, line := range logs.all() {
+		for _, token := range tokens {
+			if strings.Contains(line, token) {
+				t.Errorf("a minted token reached the log: %q", line)
+			}
+		}
+	}
 }
 
 // startedAttempt enrolls a repository, receives a case, sizes it small and
@@ -228,16 +295,17 @@ func startedAttempt(t *testing.T, st *store.Store, kind resolution.AttemptKind) 
 	return c.OpenAttempt().ID
 }
 
-func newRunner(t *testing.T, st *store.Store, sb *fakeSandbox, gh *fakeGitHub, model ac.ChatModel) (*Runner, *countMetrics) {
+func newRunner(t *testing.T, st *store.Store, sb *fakeSandbox, gh *fakeGitHub, model ac.ChatModel) (*Runner, *countMetrics, *logRecorder) {
 	t.Helper()
 	m := &countMetrics{}
+	logs := &logRecorder{t: t}
 	r := &Runner{
 		Store: st, GitHub: gh, Sandbox: sb, Ledger: &memLedger{}, Clock: resolution.SystemClock{},
-		AttemptModel: "test/auto", ApprovedModel: "test/approved", Metrics: m, Logf: t.Logf,
+		AttemptModel: "test/auto", ApprovedModel: "test/approved", Metrics: m, Logf: logs.logf,
 		CloneURL: func(repo string) string { return "file:///" + repo },
 		model:    model,
 	}
-	return r, m
+	return r, m, logs
 }
 
 func index(t *testing.T, calls []string, want string) int {
@@ -251,12 +319,37 @@ func index(t *testing.T, calls []string, want string) int {
 	return -1
 }
 
+// lastIndex is where want was called for the last time, which is what an
+// assertion about the final DiffLines count needs.
+func lastIndex(t *testing.T, calls []string, want string) int {
+	t.Helper()
+	for i := len(calls) - 1; i >= 0; i-- {
+		if calls[i] == want {
+			return i
+		}
+	}
+	t.Fatalf("%q never called: %v", want, calls)
+	return -1
+}
+
+// waitFor blocks until ok reports true, failing the test if it never does.
+func waitFor(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestRunnerOpensPullRequestOnSuccess(t *testing.T) {
 	st := storetest.Open(t)
 	id := startedAttempt(t, st, resolution.Auto)
 	sb := &fakeSandbox{commits: true}
 	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "Typo in README", Body: "teh", Open: true}}
-	r, m := newRunner(t, st, sb, gh, scripted(1, goodSummary, nil))
+	r, m, logs := newRunner(t, st, sb, gh, scripted(1, goodSummary, nil))
 	r.Run(t.Context(), id)
 	c, err := st.GetCase(t.Context(), "guy/repo", 7)
 	if err != nil {
@@ -285,11 +378,21 @@ func TestRunnerOpensPullRequestOnSuccess(t *testing.T) {
 	if len(sb.tornRepos) != 1 || sb.tornRepos[0] != "guy/repo" {
 		t.Errorf("teardown did not get the workspace Start returned: %q", sb.tornRepos)
 	}
+	// An installation token lives an hour and an attempt can run for three,
+	// so the push must carry a token minted for it, not the one Prepare used.
+	minted := gh.tokens()
+	if len(minted) != 2 {
+		t.Fatalf("minted %v, want one token for the workspace and a fresh one for the push", minted)
+	}
+	if len(sb.pushTokens) != 1 || sb.pushTokens[0] != minted[1] {
+		t.Errorf("pushed with %q, want the second mint %q", sb.pushTokens, minted[1])
+	}
+	assertNoTokenLogged(t, logs, gh)
 	// CommitAndPush kills the container, so it must come before the
 	// teardown, and the toolbox closer must still be closed after it.
 	calls := sb.order()
 	push := index(t, calls, "push")
-	if last := index(t, calls, "diff"); last > push {
+	if last := lastIndex(t, calls, "diff"); last > push {
 		t.Errorf("diff counted after the push: %v", calls)
 	}
 	if index(t, calls, "close") < push || index(t, calls, "teardown") < push {
@@ -305,7 +408,7 @@ func TestRunnerNoCommitsIsAgentFailure(t *testing.T) {
 	id := startedAttempt(t, st, resolution.Auto)
 	sb := &fakeSandbox{commits: false}
 	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
-	r, _ := newRunner(t, st, sb, gh, scripted(0, "What I found: this is not a bug.\nWhat I did: nothing.\nWhat is left: n/a.\nWhat I would do with more budget: n/a.", nil))
+	r, _, _ := newRunner(t, st, sb, gh, scripted(0, "What I found: this is not a bug.\nWhat I did: nothing.\nWhat is left: n/a.\nWhat I would do with more budget: n/a.", nil))
 	r.Run(t.Context(), id)
 	c, err := st.GetCase(t.Context(), "guy/repo", 7)
 	if err != nil {
@@ -322,7 +425,7 @@ func TestRunnerBudgetExhaustedPushesAndParks(t *testing.T) {
 	id := startedAttempt(t, st, resolution.Auto)
 	sb := &fakeSandbox{commits: true}
 	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
-	r, _ := newRunner(t, st, sb, gh, scripted(100, goodSummary, nil))
+	r, _, _ := newRunner(t, st, sb, gh, scripted(100, goodSummary, nil))
 	r.Run(t.Context(), id)
 	c, err := st.GetCase(t.Context(), "guy/repo", 7)
 	if err != nil {
@@ -339,7 +442,7 @@ func TestRunnerInfraFailureAndTeardown(t *testing.T) {
 	id := startedAttempt(t, st, resolution.Auto)
 	sb := &fakeSandbox{failStart: true}
 	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
-	r, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+	r, _, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
 	r.Run(t.Context(), id)
 	c, err := st.GetCase(t.Context(), "guy/repo", 7)
 	if err != nil {
@@ -361,7 +464,7 @@ func TestRunnerFailedPushIsInfraAndOpensNoPullRequest(t *testing.T) {
 	id := startedAttempt(t, st, resolution.Auto)
 	sb := &fakeSandbox{commits: true, failPush: errors.New("git: rejected, stale info")}
 	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
-	r, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+	r, _, logs := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
 	r.Run(t.Context(), id)
 	c, err := st.GetCase(t.Context(), "guy/repo", 7)
 	if err != nil {
@@ -374,6 +477,49 @@ func TestRunnerFailedPushIsInfraAndOpensNoPullRequest(t *testing.T) {
 	if len(sb.torn) != 1 {
 		t.Errorf("container not torn down after a failed push: %v", sb.torn)
 	}
+	assertNoTokenLogged(t, logs, gh)
+}
+
+// A push that failed under a budget stop is still a failed push: the
+// operator must not be told to resume from a branch that is not there.
+func TestRunnerFailedPushBeatsTheBudgetStop(t *testing.T) {
+	st := storetest.Open(t)
+	id := startedAttempt(t, st, resolution.Auto)
+	sb := &fakeSandbox{commits: true, failPush: errors.New("git: rejected, stale info")}
+	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
+	r, _, _ := newRunner(t, st, sb, gh, scripted(100, goodSummary, nil))
+	r.Run(t.Context(), id)
+	c, err := st.GetCase(t.Context(), "guy/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Attempts()[0].Outcome
+	if c.State() != resolution.Failed || o == nil || o.Kind != resolution.FailedOutcome || o.Class != resolution.FailureInfra {
+		t.Fatalf("state %s outcome %+v, want a failed push over the budget stop", c.State(), o)
+	}
+	if !strings.Contains(o.Message, "stale info") || !strings.Contains(o.Message, "What I found") {
+		t.Errorf("the summary was not kept as detail: %q", o.Message)
+	}
+}
+
+func TestRunnerUnpushedBranchIsInfra(t *testing.T) {
+	st := storetest.Open(t)
+	id := startedAttempt(t, st, resolution.Auto)
+	sb := &fakeSandbox{commits: true, noPush: true}
+	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
+	r, _, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+	r.Run(t.Context(), id)
+	c, err := st.GetCase(t.Context(), "guy/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Attempts()[0].Outcome
+	if c.State() != resolution.Failed || o == nil || o.Kind != resolution.FailedOutcome || o.Class != resolution.FailureInfra || len(gh.pullRequests()) != 0 {
+		t.Fatalf("state %s outcome %+v prs %v", c.State(), o, gh.pullRequests())
+	}
+	if !strings.Contains(o.Message, "did not reach the remote") || !strings.Contains(o.Message, "What I found") {
+		t.Errorf("message = %q", o.Message)
+	}
 }
 
 func TestRunnerRefreshesTheDefaultBranch(t *testing.T) {
@@ -381,7 +527,7 @@ func TestRunnerRefreshesTheDefaultBranch(t *testing.T) {
 	id := startedAttempt(t, st, resolution.Auto)
 	sb := &fakeSandbox{commits: true}
 	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}, branch: "trunk"}
-	r, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+	r, _, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
 	r.Run(t.Context(), id)
 	repo, err := st.GetRepository(t.Context(), "guy/repo")
 	if err != nil {
@@ -404,7 +550,7 @@ func TestRunnerRecordsTheApprovedTierModel(t *testing.T) {
 	id := startedAttempt(t, st, resolution.Approved)
 	sb := &fakeSandbox{commits: true}
 	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
-	r, m := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+	r, m, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
 	r.Run(t.Context(), id)
 	c, err := st.GetCase(t.Context(), "guy/repo", 7)
 	if err != nil {
@@ -433,15 +579,15 @@ func TestRunnerRefusesAnAttemptThatIsNotOpen(t *testing.T) {
 	}
 	sb := &fakeSandbox{commits: true}
 	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
-	r, m := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+	r, m, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
 	r.Run(t.Context(), id)
 	if len(sb.order()) != 0 || len(m.all()) != 0 {
 		t.Errorf("ran a closed attempt: calls %v metrics %v", sb.order(), m.all())
 	}
 }
 
-// blocking is a model that answers nothing until its context ends, so the
-// operator stop has something to cancel.
+// blocking is a model that answers nothing until its context ends, so a stop
+// has something to cancel.
 func blocking() ac.ChatModel {
 	return jess.Once(true, func(ctx context.Context, _ []ac.Message, _ []ac.ToolSpec) (*ac.LLMResponse, error) {
 		<-ctx.Done()
@@ -454,7 +600,7 @@ func TestRunnerStopByOperator(t *testing.T) {
 	id := startedAttempt(t, st, resolution.Auto)
 	sb := &fakeSandbox{commits: true}
 	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
-	r, _ := newRunner(t, st, sb, gh, blocking())
+	r, _, _ := newRunner(t, st, sb, gh, blocking())
 	done := make(chan struct{})
 	go func() { r.Run(t.Context(), id); close(done) }()
 	deadline := time.Now().Add(5 * time.Second)
@@ -479,7 +625,81 @@ func TestRunnerStopByOperator(t *testing.T) {
 		t.Errorf("pushed %v torn %v", sb.pushed, sb.torn)
 	}
 	if r.Stop(id) {
-		t.Error("second stop reported running")
+		t.Error("a finished attempt reported itself as running")
+	}
+}
+
+func TestRunnerStopDuringSetupIsAborted(t *testing.T) {
+	st := storetest.Open(t)
+	id := startedAttempt(t, st, resolution.Auto)
+	sb := &fakeSandbox{blockPrepare: true, preparing: make(chan struct{})}
+	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
+	r, _, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+	done := make(chan struct{})
+	go func() { r.Run(t.Context(), id); close(done) }()
+	select {
+	case <-sb.preparing:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the workspace was never prepared")
+	}
+	if !r.Stop(id) {
+		t.Fatal("stop did not reach the attempt preparing its workspace")
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not end after stop")
+	}
+	c, err := st.GetCase(t.Context(), "guy/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Attempts()[0].Outcome
+	if c.State() != resolution.AwaitingApproval || o == nil || o.Kind != resolution.Aborted || o.Reason != resolution.AbortOperatorStop {
+		t.Errorf("a stop during setup was not an abort: state %s outcome %+v", c.State(), o)
+	}
+	if len(sb.started) != 0 || len(sb.pushed) != 0 {
+		t.Errorf("started %v pushed %v", sb.started, sb.pushed)
+	}
+}
+
+// A shutdown under a running attempt records no outcome: app.Recovery ends
+// the attempt with Aborted{DaemonRestart} on the next boot, which re-queues
+// the case instead of parking it for a human.
+func TestRunnerShutdownLeavesTheAttemptOpen(t *testing.T) {
+	st := storetest.Open(t)
+	id := startedAttempt(t, st, resolution.Auto)
+	sb := &fakeSandbox{commits: true}
+	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
+	r, m, _ := newRunner(t, st, sb, gh, blocking())
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { r.Run(ctx, id); close(done) }()
+	waitFor(t, "the attempt to reach the agent", func() bool { return len(sb.order()) >= 3 })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not end after the daemon context was cancelled")
+	}
+	c, err := st.GetCase(t.Context(), "guy/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := c.OpenAttempt()
+	if a == nil || a.ID != id || c.State() != resolution.Attempting {
+		t.Errorf("a shutdown ended the attempt: state %s open attempt %+v", c.State(), a)
+	}
+	if c.Attempts()[0].Outcome != nil {
+		t.Errorf("outcome = %+v", c.Attempts()[0].Outcome)
+	}
+	// The commits still reach the branch, so the re-queued attempt resumes
+	// from them.
+	if len(sb.pushed) != 1 || len(sb.torn) != 1 {
+		t.Errorf("pushed %v torn %v", sb.pushed, sb.torn)
+	}
+	if got := m.all(); len(got) != 0 {
+		t.Errorf("metrics = %v", got)
 	}
 }
 
@@ -496,7 +716,7 @@ func TestRunnerCancelCarriesTheReason(t *testing.T) {
 	}
 	sb := &fakeSandbox{commits: true}
 	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: false}}
-	r, _ := newRunner(t, st, sb, gh, blocking())
+	r, _, _ := newRunner(t, st, sb, gh, blocking())
 	done := make(chan struct{})
 	go func() { r.Run(t.Context(), id); close(done) }()
 	deadline := time.Now().Add(5 * time.Second)
