@@ -1,0 +1,9 @@
+{
+  "name": "autophage-warm-fixture-npm",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Minimal fixture for deploy/image_test.sh: proves warm-deps' npm branch fetches into the cache and the agent phase can require the result with no network.",
+  "dependencies": {
+    "left-pad": "1.3.0"
+  }
+}

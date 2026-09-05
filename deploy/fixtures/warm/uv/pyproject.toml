@@ -1,0 +1,9 @@
+[project]
+name = "autophage-warm-fixture-uv"
+version = "0.0.0"
+description = "Minimal fixture for deploy/image_test.sh: proves warm-deps' uv branch fetches into the cache and the agent phase can import the result with no network."
+requires-python = ">=3.12"
+dependencies = ["six"]
+
+[tool.uv]
+package = false

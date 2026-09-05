@@ -16,34 +16,77 @@ COPY autophage/ .
 RUN CGO_ENABLED=0 go build -o /out/autophage-toolbox ./cmd/autophage-toolbox
 
 FROM docker.io/library/debian:bookworm-slim
+# Every toolchain below is pinned to an exact version and verified against a
+# checksum before it is trusted, rather than pulled as "whatever is current"
+# through a root-run install script.
 ARG GO_VERSION=1.26.5
-ARG NODE_MAJOR=22
+ARG GO_SHA256=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
+ARG NODE_VERSION=22.23.2
+ARG UV_VERSION=0.12.10
+ARG PNPM_VERSION=10.34.5
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git make gcc g++ libc6-dev pkg-config xz-utils \
     && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz
-RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
-    && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/* \
-    && corepack enable
+
+# Go: download the pinned release and check it against its published sha256
+# before extracting.
+RUN curl -fsSL --retry 3 -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" \
+    && echo "${GO_SHA256}  /tmp/go.tgz" | sha256sum -c - \
+    && tar -C /usr/local -xzf /tmp/go.tgz && rm /tmp/go.tgz
+
+# Node: the official tarball plus its release's own SHASUMS256.txt, checked
+# with sha256sum -c, not the nodesource apt script (which also drags in
+# Debian's python3 as a package dependency). Extracting straight into
+# /usr/local is the documented manual-install layout (bin, lib, include,
+# share) and puts node/npm/npx alongside go and uv.
+RUN cd /tmp \
+    && curl -fsSLO --retry 3 "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+    && curl -fsSLO --retry 3 "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" \
+    && grep " node-v${NODE_VERSION}-linux-x64.tar.xz\$" SHASUMS256.txt | sha256sum -c - \
+    && tar -C /usr/local -xJf "node-v${NODE_VERSION}-linux-x64.tar.xz" --strip-components=1 \
+    && rm "node-v${NODE_VERSION}-linux-x64.tar.xz" SHASUMS256.txt
+
 # Debian bookworm's apt-get python3 is 3.11; get 3.12 from uv's own managed
 # interpreters instead (a self-contained build, no extra apt source needed)
-# and put it on PATH as the system python3.
-RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
+# and put it on PATH as the system python3. uv itself is pinned to an exact
+# version via astral.sh's versioned install-script URL, then the resulting
+# binary is checked against that pin.
+RUN curl -LsSf --retry 3 "https://astral.sh/uv/${UV_VERSION}/install.sh" | env UV_INSTALL_DIR=/usr/local/bin sh \
+    && uv --version | grep -q "${UV_VERSION}" \
     && export UV_PYTHON_INSTALL_DIR=/opt/uv/python \
     && uv python install 3.12 \
     && ln -sf "$(uv python find 3.12)" /usr/local/bin/python3 \
     && ln -sf /usr/local/bin/python3 /usr/local/bin/python3.12 \
     && chmod -R a+rX /opt/uv/python
+
+# pnpm: baked in at build time via corepack, pinned to an exact version,
+# rather than left for an agent's first `pnpm` invocation to fetch (which
+# would need network in the no-network agent phase and would land in
+# $HOME/.cache/node/corepack, off the mounted cache volumes). COREPACK_HOME
+# persists into the runtime environment below so the activated shim finds
+# this pinned pnpm instead of trying to fetch one.
+ENV COREPACK_HOME=/opt/corepack
+RUN corepack enable \
+    && corepack prepare "pnpm@${PNPM_VERSION}" --activate \
+    && chmod -R a+rX /opt/corepack
+
 COPY --from=toolbox /out/autophage-toolbox /usr/local/bin/autophage-toolbox
 COPY autophage/deploy/warm-deps /usr/local/bin/warm-deps
 RUN chmod 0755 /usr/local/bin/warm-deps /usr/local/bin/autophage-toolbox \
     && useradd --uid 1000 --create-home --shell /bin/bash agent \
-    && mkdir -p /work /cache/go/mod /cache/go/build /cache/npm /cache/uv \
+    && mkdir -p /work /cache/go/mod /cache/go/build /cache/npm /cache/npm/pnpm-store /cache/uv \
     && chown -R agent:agent /work /cache
 USER agent
+# GOFLAGS keeps -mod=mod: an attempt may need to touch go.mod/go.sum. GOPROXY=off
+# is set by the daemon at run time for the agent phase, on top of this; the real
+# backstop against network use is --network=none on the container, not the
+# proxy setting. npm_config_store_dir moves pnpm's content-addressable store
+# from its default (~/.local/share/pnpm/store, off the cache volumes) onto the
+# mounted /cache/npm so warm-deps and the agent phase share it like npm's own
+# npm_config_cache does.
 ENV HOME=/home/agent \
     PATH=/usr/local/go/bin:/home/agent/go/bin:/usr/local/bin:/usr/bin:/bin \
     GOMODCACHE=/cache/go/mod GOCACHE=/cache/go/build GOFLAGS=-mod=mod GOTOOLCHAIN=local \
-    npm_config_cache=/cache/npm UV_CACHE_DIR=/cache/uv
+    npm_config_cache=/cache/npm npm_config_store_dir=/cache/npm/pnpm-store UV_CACHE_DIR=/cache/uv
 WORKDIR /work
