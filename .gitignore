@@ -1,6 +1,7 @@
 # Build artifacts
 /autophaged
 /autophage
+/autophage-toolbox
 /bin/
 # Built web assets (the dir is kept by web/dist/.gitkeep; assets are not committed)
 /web/dist/*

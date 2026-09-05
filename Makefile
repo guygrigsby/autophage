@@ -1,4 +1,4 @@
-.PHONY: help web-dev server-dev web-build server-build cli-build build \
+.PHONY: help web-dev server-dev web-build server-build cli-build toolbox-build build \
         server-test web-test test check lint clean \
         install install-launchd uninstall-launchd redeploy redeploy-launchd redeploy-systemd \
         install-systemd service-restart dev
@@ -43,7 +43,10 @@ server-build: ## Build the autophaged daemon (embeds web/dist)
 cli-build: ## Build the app CLI
 	go build -o $(APP) ./cmd/autophage
 
-build: server-build cli-build ## Build both binaries (+ SPA when web/ is present)
+toolbox-build: ## Build the sandbox toolbox
+	go build -o autophage-toolbox ./cmd/autophage-toolbox
+
+build: server-build cli-build toolbox-build ## Build both binaries (+ SPA when web/ is present)
 	@if [ -n "$(HAS_WEB)" ]; then $(MAKE) web-build; fi
 
 server-dev: ## Run autophaged from source
@@ -122,6 +125,6 @@ dev: ## Run autophaged watcher + Vite together (both hot-reload)
 	  wait
 
 clean: ## Remove build artifacts
-	rm -f $(APP)d $(APP)
+	rm -f $(APP)d $(APP) autophage-toolbox
 	@find $(WEB_DIR)/dist -mindepth 1 ! -name .gitkeep -exec rm -rf {} + 2>/dev/null || true
 	@echo "✓ clean"
