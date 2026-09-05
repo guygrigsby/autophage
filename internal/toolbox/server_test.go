@@ -11,7 +11,10 @@ import (
 	"time"
 
 	jessmcp "github.com/guygrigsby/jess/mcp"
+	mcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	ac "github.com/voocel/agentcore"
+
+	"github.com/guygrigsby/autophage/internal/toolbox"
 )
 
 var binary string
@@ -109,6 +112,68 @@ func TestToolboxMarksReadOnlyTools(t *testing.T) {
 			t.Errorf("%s: ReadOnly = %v, want %v", name, got, want)
 		}
 	}
+}
+
+// panicTool is a test-only ac.Tool whose Execute panics, standing in for a
+// real tool (agentcore's edit, doing block matching over attacker-influenced
+// strings, is the most exposed) misbehaving on bad input.
+type panicTool struct{}
+
+func (panicTool) Name() string           { return "panic_test_tool" }
+func (panicTool) Description() string    { return "test-only tool that always panics" }
+func (panicTool) Schema() map[string]any { return map[string]any{"type": "object"} }
+func (panicTool) Execute(context.Context, json.RawMessage) (json.RawMessage, error) {
+	panic("boom")
+}
+
+func TestToolboxRecoversToolPanics(t *testing.T) {
+	srv, err := toolbox.New(toolbox.Options{WorkDir: t.TempDir(), Extra: []ac.Tool{panicTool{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := t.Context()
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	if _, err := srv.Connect(ctx, serverTransport, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v1"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "panic_test_tool"})
+	if err != nil {
+		t.Fatalf("a panic must come back as a result, not a Go error: %v", err)
+	}
+	if !res.IsError {
+		t.Errorf("want IsError, got %+v", res)
+	}
+	if text := textOf(res); !strings.Contains(text, "tool panicked") {
+		t.Errorf("result = %q, want it to contain %q", text, "tool panicked")
+	}
+
+	// The panic must not have taken the server down: a following call on
+	// another tool still works.
+	res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "ls", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("ls after panic: %v", err)
+	}
+	if res.IsError {
+		t.Errorf("ls after panic errored: %s", textOf(res))
+	}
+}
+
+func textOf(res *mcp.CallToolResult) string {
+	var parts []string
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			parts = append(parts, tc.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func keys(m map[string]ac.Tool) []string {
