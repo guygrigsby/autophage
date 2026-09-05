@@ -19,9 +19,15 @@ import (
 // to arrive, which on a quiet repository is for ever.
 const defaultFloor = 60 * time.Second
 
-// shutdownWait bounds how long Run will hold the daemon open for runners
-// that have not returned.
-const shutdownWait = 30 * time.Second
+// ShutdownWait bounds how long Run will hold the daemon open for runners
+// that have not returned. Five minutes, because a runner that is going down
+// still has real work to finish: the re-mint, then CommitAndPush, which
+// removes the agent container and pushes the branch. Cut short there, the
+// attempt's commits stay on host disk and the re-queued attempt starts from
+// nothing. cmd/autophaged waits the same again on the scheduler before it
+// closes the pool, and deploy/autophaged.service.template gives systemd
+// TimeoutStopSec=600 to cover both.
+const ShutdownWait = 5 * time.Minute
 
 // Canceller cancels a running attempt; the runner implements it.
 type Canceller interface {
@@ -109,8 +115,8 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			if !d.Scheduler.WaitTimeout(shutdownWait) {
-				log.Printf("shutdown: gave up after %s on running attempts: %s", shutdownWait, strings.Join(d.Scheduler.Running(), ", "))
+			if !d.Scheduler.WaitTimeout(ShutdownWait) {
+				log.Printf("shutdown: gave up after %s on running attempts: %s", ShutdownWait, strings.Join(d.Scheduler.Running(), ", "))
 			}
 			return nil
 		case <-d.wake:

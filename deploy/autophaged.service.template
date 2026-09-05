@@ -11,6 +11,13 @@ ExecStart={{INSTALL_DIR}}/autophaged
 # retries until Postgres is reachable, restarting every 5s until it connects.
 Restart=always
 RestartSec=5s
+# The daemon finishes a running attempt on the way down: it stops the agent,
+# pushes what was committed and records the outcome. KillMode=mixed sends the
+# stop signal to the daemon alone, so systemd does not kill the git and
+# podman children it is in the middle of running, and TimeoutStopSec covers
+# the dispatcher's wait on the runners plus the same again in main.
+KillMode=mixed
+TimeoutStopSec=600
 EnvironmentFile=%h/.config/autophage/env
 WorkingDirectory=%h
 StandardOutput=journal

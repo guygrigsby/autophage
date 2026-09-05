@@ -27,8 +27,8 @@ const (
 	githubTimeout = 60 * time.Second
 	// remintTimeout is shorter still, because the push token's re-mint sits
 	// between the run ending and the work reaching the branch. It has to
-	// leave room inside the dispatcher's 30 second shutdown wait
-	// (internal/app/dispatcher.go) for CommitAndPush to run at all, so a
+	// leave room inside the dispatcher's shutdown wait
+	// (internal/app.ShutdownWait) for CommitAndPush to run at all, so a
 	// GitHub that hangs costs the attempt its fresh token, not its commits.
 	remintTimeout = 15 * time.Second
 )

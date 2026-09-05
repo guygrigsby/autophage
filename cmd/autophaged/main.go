@@ -91,11 +91,12 @@ func main() {
 		Logf:          log.Printf,
 		Metrics:       api.RunnerMetrics{},
 	}
+	scheduler := &app.Scheduler{Store: st, Runner: runner, Concurrency: cfg.Sandbox.Concurrency, Clock: clock, Budgets: app.BudgetPolicy{Auto: autoBudget, Approved: approvedBudget}, GitHub: gh}
 	dispatcher := &app.Dispatcher{
 		Store:      st,
 		Translator: &github.Translator{Store: st, Clock: clock, ApprovedLabel: cfg.Label.Approved, BotLogin: cfg.GitHub.BotLogin},
 		Triage:     &app.Triage{Store: st, Triager: runner.Triager(), GitHub: gh, Clock: clock},
-		Scheduler:  &app.Scheduler{Store: st, Runner: runner, Concurrency: cfg.Sandbox.Concurrency, Clock: clock, Budgets: app.BudgetPolicy{Auto: autoBudget, Approved: approvedBudget}, GitHub: gh},
+		Scheduler:  scheduler,
 		Commenter:  &app.Commenter{Store: st, GitHub: gh, Label: cfg.Label.Approved},
 		Enrollment: &app.Enrollment{Store: st, GitHub: gh, Label: cfg.Label.Approved},
 		Recovery:   &app.Recovery{Store: st, Clock: clock},
@@ -137,6 +138,15 @@ func main() {
 	}
 	cancel()
 	wg.Wait()
+	// The dispatcher waits on the runners itself, but only while its own Run
+	// is still in the loop: a dispatcher that returned early (a Recovery
+	// failure, a context already done when Run was entered) leaves attempts
+	// in flight. They own the database and the ledger, so the wait comes
+	// before the pool and the ledger are closed under them, bounded the same
+	// way the dispatcher bounds its own.
+	if !scheduler.WaitTimeout(app.ShutdownWait) {
+		log.Printf("shutdown: gave up after %s on running attempts: %s", app.ShutdownWait, strings.Join(scheduler.Running(), ", "))
+	}
 	_ = ledgerDB.Close()
 }
 
