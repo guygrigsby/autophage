@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/guygrigsby/perch/config"
-	"github.com/guygrigsby/perch/daemon"
 	rootapp "github.com/guygrigsby/autophage"
 	"github.com/guygrigsby/autophage/internal/api"
+	"github.com/guygrigsby/perch/config"
+	"github.com/guygrigsby/perch/daemon"
 )
 
 // appConfig is the app's config.toml shape. Extend per app.
