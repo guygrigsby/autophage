@@ -40,13 +40,16 @@ func (s *Store) Pool() *pgxpool.Pool { return s.pool }
 func (s *Store) Close() { s.pool.Close() }
 
 // tx runs fn in a transaction, committing on nil and rolling back otherwise.
+// The deferred rollback also covers a panic inside fn: it runs unconditionally,
+// and after a successful commit it is a harmless no-op that returns
+// pgx.ErrTxClosed.
 func (s *Store) tx(ctx context.Context, fn func(pgx.Tx) error) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback(ctx)
 		return err
 	}
 	return tx.Commit(ctx)
