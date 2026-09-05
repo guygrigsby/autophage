@@ -262,6 +262,23 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 		o, cerr := resolution.OutcomeFailed(class, message, u, r.now())
 		return r.settled(o, cerr, u)
 	}
+	// infra ends the attempt on an infrastructure failure. The raw error is
+	// logged against the attempt id and never put in the outcome: the
+	// outcome message is posted verbatim to the issue, where a host path, a
+	// git argv or a podman mount flag is detail the requester has no
+	// business reading and the operator would rather have from
+	// `autophage why`. detail is the agent's summary when the run got far
+	// enough to produce one.
+	infra := func(step string, err error, detail string, u resolution.Usage) resolution.Outcome {
+		if err != nil {
+			r.logf("runner %s: %s: %v", a.ID, step, err)
+		}
+		message := fmt.Sprintf("infrastructure failure at %s; see `autophage why %s` on the daemon host", step, a.ID)
+		if detail != "" {
+			message += "\n\n" + detail
+		}
+		return failed(resolution.FailureInfra, message, u)
+	}
 	// setup ends the attempt on a failure before the agent ran. A
 	// cancellation is not an infrastructure failure: it is the stop
 	// somebody asked for, or the daemon going down under the attempt.
@@ -283,7 +300,7 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 				return resolution.Outcome{}, errShutdown
 			}
 		}
-		return failed(resolution.FailureInfra, step+": "+err.Error(), resolution.Usage{}), nil
+		return infra(step, err, "", resolution.Usage{}), nil
 	}
 
 	repo, err := r.Store.GetRepository(ctx, c.Repository())
@@ -402,26 +419,29 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	// A branch that did not reach the remote is an infrastructure failure
 	// whatever ended the run: the work exists on host disk only, and a
 	// budget or abort outcome would send the operator to a branch that is
-	// not there. A re-mint that failed is named here too, since it is the
-	// likely reason the push was refused. The agent's summary rides along
-	// as detail, since it is the only account of what the attempt did.
+	// not there. A re-mint that failed is named in the log too, since it is
+	// the likely reason the push was refused. The agent's summary rides
+	// along as detail, since it is the only account of what the attempt did.
 	if pushErr != nil || !pushed {
-		why := "the branch did not reach the remote"
-		if pushErr != nil {
-			why = pushErr.Error()
+		why := pushErr
+		if why == nil {
+			why = errors.New("the branch did not reach the remote")
 		}
 		if mintErr != nil {
-			why += " (the push token could not be re-minted: " + mintErr.Error() + ")"
+			why = fmt.Errorf("%w (the push token could not be re-minted: %v)", why, mintErr)
 		}
-		return failed(resolution.FailureInfra, "push: "+why+"\n\n"+summary, report.Usage), nil
+		return infra("push", why, summary, report.Usage), nil
 	}
 
 	switch report.Stop {
 	case StopModelErr:
-		message := "the model run ended with an error"
+		// Same rule as an infrastructure failure: the model's own error text
+		// is an operator's fact, logged with the attempt id, not something
+		// to post on the issue.
 		if report.Err != nil {
-			message = report.Err.Error()
+			r.logf("runner %s: model run: %v", a.ID, report.Err)
 		}
+		message := fmt.Sprintf("model failure; see `autophage why %s` on the daemon host\n\n%s", a.ID, summary)
 		return failed(resolution.FailureModel, message, report.Usage), nil
 	case StopCancelled:
 		o, cerr := resolution.OutcomeAborted(r.reason(slot, resolution.AbortOperatorStop), summary, report.Usage, r.now())
@@ -466,7 +486,7 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	pr, err := r.GitHub.OpenPullRequest(ghCtx, c.Repository(), c.Branch(), repo.DefaultBranch, title, body)
 	if err != nil {
 		// The branch is pushed, so a retry after approval resumes from it.
-		return failed(resolution.FailureInfra, "open pull request: "+err.Error()+"\n\n"+summary, report.Usage), nil
+		return infra("open pull request", err, summary, report.Usage), nil
 	}
 	o, cerr := resolution.OutcomePullRequest(pr, head, summary, report.Usage, r.now())
 	return r.settled(o, cerr, report.Usage), nil

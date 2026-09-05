@@ -268,6 +268,29 @@ func (l *logRecorder) all() []string {
 	return append([]string(nil), l.lines...)
 }
 
+// assertOperatorMessage proves an outcome message is the one operator-facing
+// line: it names what failed and where to look, and nothing else. The
+// message is posted verbatim to the issue.
+func assertOperatorMessage(t *testing.T, message, want, attemptID string) {
+	t.Helper()
+	head, _, _ := strings.Cut(message, "\n")
+	if head != want+"; see `autophage why "+attemptID+"` on the daemon host" {
+		t.Errorf("outcome message opens %q, want %q with the attempt id", head, want)
+	}
+}
+
+// assertLogged proves the raw failure the outcome no longer carries reached
+// the operator's log instead.
+func assertLogged(t *testing.T, logs *logRecorder, want string) {
+	t.Helper()
+	for _, line := range logs.all() {
+		if strings.Contains(line, want) {
+			return
+		}
+	}
+	t.Errorf("%q never reached the log: %v", want, logs.all())
+}
+
 // assertNoTokenLogged proves no installation token the run minted was
 // written to the log.
 func assertNoTokenLogged(t *testing.T, logs *logRecorder, gh *fakeGitHub) {
@@ -472,15 +495,23 @@ func TestRunnerInfraFailureAndTeardown(t *testing.T) {
 	id := startedAttempt(t, st, resolution.Auto)
 	sb := &fakeSandbox{failStart: true}
 	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
-	r, _, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+	r, _, logs := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
 	r.Run(t.Context(), id)
 	c, err := st.GetCase(t.Context(), "guy/repo", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
 	o := c.Attempts()[0].Outcome
-	if c.State() != resolution.Failed || o == nil || o.Class != resolution.FailureInfra || !strings.Contains(o.Message, "image missing") || c.Attempts()[0].Run != nil {
+	if c.State() != resolution.Failed || o == nil || o.Class != resolution.FailureInfra || c.Attempts()[0].Run != nil {
 		t.Errorf("state %s outcome %+v run %+v", c.State(), o, c.Attempts()[0].Run)
+	}
+	// The outcome message is posted to the issue, so it names the step and
+	// where to look, never the raw error; the raw error is the operator's,
+	// in the log, against the attempt id.
+	assertOperatorMessage(t, o.Message, "infrastructure failure at start container", id)
+	assertLogged(t, logs, "image missing")
+	if strings.Contains(o.Message, "image missing") {
+		t.Errorf("the raw error reached the issue comment: %q", o.Message)
 	}
 	// A failed Start releases the workspace lock itself, so the runner must
 	// not tear down a container it never got.
@@ -501,8 +532,13 @@ func TestRunnerFailedPushIsInfraAndOpensNoPullRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := c.Attempts()[0].Outcome
-	if c.State() != resolution.Failed || o == nil || o.Class != resolution.FailureInfra || !strings.Contains(o.Message, "stale info") || len(gh.pullRequests()) != 0 {
+	if c.State() != resolution.Failed || o == nil || o.Class != resolution.FailureInfra || len(gh.pullRequests()) != 0 {
 		t.Errorf("state %s outcome %+v prs %v", c.State(), o, gh.pullRequests())
+	}
+	assertOperatorMessage(t, o.Message, "infrastructure failure at push", id)
+	assertLogged(t, logs, "stale info")
+	if strings.Contains(o.Message, "stale info") {
+		t.Errorf("the raw git error reached the issue comment: %q", o.Message)
 	}
 	if len(sb.torn) != 1 {
 		t.Errorf("container not torn down after a failed push: %v", sb.torn)
@@ -517,7 +553,7 @@ func TestRunnerFailedPushBeatsTheBudgetStop(t *testing.T) {
 	id := startedAttempt(t, st, resolution.Auto)
 	sb := &fakeSandbox{commits: true, failPush: errors.New("git: rejected, stale info")}
 	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
-	r, _, _ := newRunner(t, st, sb, gh, scripted(100, goodSummary, nil))
+	r, _, logs := newRunner(t, st, sb, gh, scripted(100, goodSummary, nil))
 	r.Run(t.Context(), id)
 	c, err := st.GetCase(t.Context(), "guy/repo", 7)
 	if err != nil {
@@ -527,7 +563,9 @@ func TestRunnerFailedPushBeatsTheBudgetStop(t *testing.T) {
 	if c.State() != resolution.Failed || o == nil || o.Kind != resolution.FailedOutcome || o.Class != resolution.FailureInfra {
 		t.Fatalf("state %s outcome %+v, want a failed push over the budget stop", c.State(), o)
 	}
-	if !strings.Contains(o.Message, "stale info") || !strings.Contains(o.Message, "What I found") {
+	assertOperatorMessage(t, o.Message, "infrastructure failure at push", id)
+	assertLogged(t, logs, "stale info")
+	if !strings.Contains(o.Message, "What I found") {
 		t.Errorf("the summary was not kept as detail: %q", o.Message)
 	}
 }
@@ -537,7 +575,7 @@ func TestRunnerUnpushedBranchIsInfra(t *testing.T) {
 	id := startedAttempt(t, st, resolution.Auto)
 	sb := &fakeSandbox{commits: true, noPush: true}
 	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
-	r, _, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+	r, _, logs := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
 	r.Run(t.Context(), id)
 	c, err := st.GetCase(t.Context(), "guy/repo", 7)
 	if err != nil {
@@ -547,7 +585,9 @@ func TestRunnerUnpushedBranchIsInfra(t *testing.T) {
 	if c.State() != resolution.Failed || o == nil || o.Kind != resolution.FailedOutcome || o.Class != resolution.FailureInfra || len(gh.pullRequests()) != 0 {
 		t.Fatalf("state %s outcome %+v prs %v", c.State(), o, gh.pullRequests())
 	}
-	if !strings.Contains(o.Message, "did not reach the remote") || !strings.Contains(o.Message, "What I found") {
+	assertOperatorMessage(t, o.Message, "infrastructure failure at push", id)
+	assertLogged(t, logs, "did not reach the remote")
+	if !strings.Contains(o.Message, "What I found") {
 		t.Errorf("message = %q", o.Message)
 	}
 }
@@ -583,8 +623,15 @@ func TestRunnerPushesWithTheTokenInHandWhenTheReMintFails(t *testing.T) {
 			if c.State() != tc.wantState || o == nil || o.Kind != tc.wantKind {
 				t.Fatalf("state %s outcome %+v", c.State(), o)
 			}
-			if tc.failPush != nil && (o.Class != resolution.FailureInfra || !strings.Contains(o.Message, "401 unauthorized") || !strings.Contains(o.Message, "500 minting")) {
-				t.Errorf("the push and the re-mint were not both reported: %+v", o)
+			if tc.failPush != nil {
+				if o.Class != resolution.FailureInfra {
+					t.Errorf("class = %s", o.Class)
+				}
+				assertOperatorMessage(t, o.Message, "infrastructure failure at push", id)
+				// Both halves reach the operator's log: the push that was
+				// refused and the re-mint that is the likely reason why.
+				assertLogged(t, logs, "401 unauthorized")
+				assertLogged(t, logs, "500 minting")
 			}
 			assertNoTokenLogged(t, logs, gh)
 		})
@@ -944,5 +991,40 @@ func TestRunnerConflictMarkerCheckFailureStillOpensThePullRequest(t *testing.T) 
 	o := c.Attempts()[0].Outcome
 	if c.State() != resolution.Done || o == nil || o.Kind != resolution.PullRequestOpened {
 		t.Fatalf("state %s outcome %+v", c.State(), o)
+	}
+}
+
+// A model that fails is Failed{Model}, and its error is the operator's to
+// read in the log, not the requester's to read on the issue.
+func TestRunnerModelErrorIsAModelFailure(t *testing.T) {
+	st := storetest.Open(t)
+	id := startedAttempt(t, st, resolution.Auto)
+	sb := &fakeSandbox{commits: true}
+	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
+	broken := jess.Once(true, func(context.Context, []ac.Message, []ac.ToolSpec) (*ac.LLMResponse, error) {
+		return nil, errors.New("openrouter: 402 insufficient credits")
+	})
+	r, m, logs := newRunner(t, st, sb, gh, broken)
+	r.Run(t.Context(), id)
+	c, err := st.GetCase(t.Context(), "guy/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Attempts()[0].Outcome
+	if c.State() != resolution.Failed || o == nil || o.Kind != resolution.FailedOutcome || o.Class != resolution.FailureModel {
+		t.Fatalf("state %s outcome %+v", c.State(), o)
+	}
+	assertOperatorMessage(t, o.Message, "model failure", id)
+	assertLogged(t, logs, "402 insufficient credits")
+	if strings.Contains(o.Message, "402 insufficient credits") {
+		t.Errorf("the raw model error reached the issue comment: %q", o.Message)
+	}
+	// The work still reaches the branch, and no pull request is opened from
+	// a run the model never finished.
+	if len(sb.pushed) != 1 || len(gh.pullRequests()) != 0 {
+		t.Errorf("pushed %v prs %v", sb.pushed, gh.pullRequests())
+	}
+	if got := m.all(); len(got) != 1 || got[0] != "auto/failed" {
+		t.Errorf("metrics = %v", got)
 	}
 }
