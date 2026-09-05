@@ -6,6 +6,7 @@ require (
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0
 	github.com/google/go-github/v88 v88.0.0
 	github.com/guygrigsby/jess v0.0.0
+	github.com/guygrigsby/llm v0.0.0
 	github.com/guygrigsby/perch v0.1.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
@@ -15,6 +16,8 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
 	github.com/voocel/agentcore v1.6.9
 )
+
+require github.com/philippgille/chromem-go v0.7.1-0.20260517180012-fbeda8ab2b7a // indirect
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
@@ -104,3 +107,5 @@ require (
 )
 
 replace github.com/guygrigsby/jess => ../jess
+
+replace github.com/guygrigsby/llm => ../llm
