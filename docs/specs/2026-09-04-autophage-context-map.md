@@ -15,6 +15,7 @@
 | Budget | The limits on one attempt: turns, wall clock, diff lines | Resolution |
 | Brief | The complete prompt handed to the agent for one attempt | Resolution |
 | Outcome | How an attempt ended: PullRequestOpened, BudgetExhausted, Failed or Aborted, with usage | Resolution |
+| Transition | One recorded state change of a case, with its cause. The Scheduler orders the queue by it | Resolution |
 | Closure | The issue was closed on GitHub. Terminal for the case | Resolution |
 | Delivery | One webhook delivery from GitHub, stored byte-exact, processed at most once | GitHub boundary |
 | Workspace | The host directory holding a case's checkout on its branch | Sandbox boundary |
@@ -30,7 +31,7 @@ Groupings inside Resolution, one language throughout:
 
 | Grouping | Owns |
 |---|---|
-| Casework | Case, Requester, Triage, Approval, Attempt, Run, Outcome, Closure |
+| Casework | Case, Requester, Triage, Approval, ApprovalDelivery, Transition, Attempt, Run, Outcome, Closure |
 | Enrollment | Repository, Removal |
 
 External systems, each behind a port in Resolution's types and one adapter package:
@@ -64,7 +65,7 @@ Repository means the same thing on both sides. No split.
 
 ## Stored and derived
 
-- Stored: every delivery verbatim; Case facts (triage, approvals, attempts, runs, outcomes, closure); the trust verdict at receipt; the case state summary; the brief as sent; the budget snapshot per attempt; usage per outcome.
+- Stored: every delivery verbatim; Case facts (triage, approvals, transitions, attempts, runs, outcomes, closure); the trust verdict at receipt; the case state summary; the brief as sent; the budget snapshot per attempt; usage per outcome.
 - Derived, never stored: branch name (`autophage/<number>`); workspace path (from repository and branch); the kind of the next attempt (Approved if an approval postdates the latest attempt's start or no attempt exists, else Auto); "is enrolled" (no Removal row).
 
 ## Still open

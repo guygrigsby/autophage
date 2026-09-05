@@ -13,6 +13,7 @@ flowchart TB
         Attempt
         Run
         Outcome
+        Transition
         Closure
     end
     GH[["GitHub (external)"]] -.-> Case
@@ -36,7 +37,7 @@ Entity, aggregate root. One issue in one enrolled repository that autophage is h
 | `state` | CaseState | The aggregate's summary of its facts, updated in the same transaction as each fact |
 | `receivedAt` | Timestamp | When the opening delivery was processed |
 
-Triage, approvals, attempts and closure are not fields. Each is its own object and table; the row's existence is the state.
+Triage, approvals, attempts, transitions and closure are not fields. Each is its own object and table; the row's existence is the state. `state` equals the latest Transition's `to`, or the initial state when there is none; it is stored for the state index.
 
 ### Behaviors
 
@@ -98,6 +99,7 @@ Anything not drawn is refused by the aggregate.
 | `Triage` | has-a (owned) | 1 to 0..1 |
 | `Approval` | has-a (owned) | 1 to 0..n |
 | `Attempt` | has-a (owned) | 1 to 0..n |
+| `Transition` | has-a (owned) | 1 to 0..n |
 | `Closure` | has-a (owned) | 1 to 0..1 |
 
 ## Requester
@@ -145,15 +147,35 @@ Value object, owned by `Case`, table `case_approvals`. One row per `approved` la
 | Field | Type | Meaning |
 |---|---|---|
 | `repository`, `number` | | Owner key |
-| `approver` | Requester | Who added the label, with association and trust as evidence |
+| `approver` | Requester | Who approved, with association and trust as evidence. For an operator approval: the App owner's login, Trusted |
+| `source` | ApprovalSource | Label: the `approved` label was added on GitHub. Operator: `autophage run` |
 | `approvedAt` | Timestamp | |
-| `deliveryId` | string | The GitHub delivery that carried the label event |
+
+The delivery behind a label approval is not a field. A label-sourced approval has an `ApprovalDelivery` row; an operator-sourced one has none.
 
 ### Relationships
 
 | With | Kind | Cardinality |
 |---|---|---|
 | `Case` | owned by | n to 1 |
+| `ApprovalDelivery` | has-a (owned) | 1 to 0..1 |
+
+## ApprovalDelivery
+
+Value object, owned by `Approval`, table `case_approval_deliveries`. Exists exactly when the approval came from a label event.
+
+### Fields
+
+| Field | Type | Meaning |
+|---|---|---|
+| `approvalId` | string | Owner key |
+| `deliveryId` | string | The GitHub delivery that carried the label event |
+
+### Relationships
+
+| With | Kind | Cardinality |
+|---|---|---|
+| `Approval` | owned by | 0..1 to 1 |
 
 ## Attempt
 
@@ -163,7 +185,7 @@ Entity, owned by `Case`, table `attempts`. One budgeted try at the case on its b
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | string | ULID |
+| `id` | string | Database-generated UUID. Ordering is by `startedAt` |
 | `repository`, `number` | | Owner key |
 | `ordinal` | int | 1-based position among the case's attempts. Unique per case |
 | `kind` | AttemptKind | Which budget policy applied |
@@ -259,6 +281,26 @@ Value object, owned by `Case`, table `case_closures`. Exists exactly when the is
 | With | Kind | Cardinality |
 |---|---|---|
 | `Case` | owned by | 0..1 to 1 |
+
+## Transition
+
+Value object, owned by `Case`, table `case_transitions`. One row per state change, appended in the same transaction as the fact that caused it. The initial state is not a transition.
+
+### Fields
+
+| Field | Type | Meaning |
+|---|---|---|
+| `caseId` | string | Owner key |
+| `from` | CaseState | |
+| `to` | CaseState | Differs from `from` |
+| `cause` | TransitionCause | Which fact caused it |
+| `occurredAt` | Timestamp | The Scheduler orders Queued cases by this |
+
+### Relationships
+
+| With | Kind | Cardinality |
+|---|---|---|
+| `Case` | owned by | n to 1 |
 
 ## Budget
 
@@ -366,10 +408,15 @@ Value object, owned by `Repository`, table `repository_removals`.
 
 **AbortReason**: `issue_closed`, `operator_stop`, `daemon_restart`.
 
+**ApprovalSource**: `label`, `operator`.
+
+**TransitionCause**: `triage_small`, `triage_large`, `approval`, `attempt_started`, `outcome_pull_request_opened`, `outcome_budget_exhausted`, `outcome_failed`, `outcome_aborted_operator_stop`, `outcome_aborted_daemon_restart_requeued`, `outcome_aborted_daemon_restart_failed`, `closed`.
+
 ## Domain services
 
 - `BuildBrief`: spans Case, Repository, Budget and the prior Outcome. The only constructor of Brief.
 - `BudgetFor(kind)`: config lookup, `auto` or `approved`.
+- `Scheduler`: the rules that span cases. At most `concurrency` open attempts across all cases; Queued cases start in order of the Transition that queued them; no attempt starts for a removed repository.
 
 Everything else is orchestration in application services: translating deliveries, dispatching queued cases, running an attempt end to end.
 
@@ -381,6 +428,8 @@ erDiagram
     REPOSITORY ||--o{ CASE : "referenced by"
     CASE ||--o| CASE_TRIAGE : sized
     CASE ||--o{ CASE_APPROVAL : approved
+    CASE_APPROVAL ||--o| CASE_APPROVAL_DELIVERY : "carried by"
+    CASE ||--o{ CASE_TRANSITION : "moved by"
     CASE ||--o{ ATTEMPT : tries
     CASE ||--o| CASE_CLOSURE : "closed by"
     ATTEMPT ||--o| ATTEMPT_RUN : executed
@@ -418,8 +467,17 @@ classDiagram
     }
     class Approval {
         Requester approver
+        ApprovalSource source
         Timestamp approvedAt
+    }
+    class ApprovalDelivery {
         string deliveryId
+    }
+    class Transition {
+        CaseState from
+        CaseState to
+        TransitionCause cause
+        Timestamp occurredAt
     }
     class Attempt {
         string id
@@ -465,7 +523,9 @@ classDiagram
     Case "1" *-- "0..1" Triage
     Case "1" *-- "0..*" Approval
     Case "1" *-- "0..*" Attempt
+    Case "1" *-- "0..*" Transition
     Case "1" *-- "0..1" Closure
+    Approval "1" *-- "0..1" ApprovalDelivery
     Attempt "1" *-- "1" Budget
     Attempt "1" *-- "0..1" Run
     Attempt "1" *-- "0..1" Outcome
