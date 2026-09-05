@@ -65,10 +65,14 @@ test: server-test ## Run all tests (Go, web when present)
 lint: ## Run golangci-lint
 	$(GOLANGCI) run
 
+# The gate runs the tests under the race detector: this daemon runs every
+# attempt on its own goroutine and shuts them down from another, so a data
+# race is a production bug, not a test-only curiosity. `make test` stays
+# race-free for a fast inner loop.
 check: lint ## One-shot quality gate for agents (run before claiming done)
 	@test -z "$$(gofmt -l .)" || { echo "gofmt needs:"; gofmt -l .; exit 1; }
 	go vet ./...
-	go test ./...
+	go test -race ./...
 	@if [ -n "$(HAS_WEB)" ]; then $(MAKE) web-build; fi
 
 install: build ## Install both binaries to INSTALL_DIR
