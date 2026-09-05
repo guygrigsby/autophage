@@ -1,0 +1,42 @@
+# autophage sandbox: every attempt runs its tools in a fresh container from
+# this image. No secrets, no network in the agent phase. Built on trig by
+# `make image`.
+#
+# Build context is the parent of this checkout (see the Makefile's `image`
+# target): `github.com/guygrigsby/jess` is pulled in via a go.mod `replace`
+# and is not part of this repo, so it has to be a sibling directory in the
+# context. Once jess is published and the replace is dropped, drop the
+# `COPY jess /jess` line below and build with context `.` instead.
+FROM docker.io/library/golang:1.26-bookworm AS toolbox
+WORKDIR /src
+COPY autophage/go.mod autophage/go.sum ./
+COPY jess /jess
+RUN go mod download
+COPY autophage/ .
+RUN CGO_ENABLED=0 go build -o /out/autophage-toolbox ./cmd/autophage-toolbox
+
+FROM docker.io/library/debian:bookworm-slim
+ARG GO_VERSION=1.26.5
+ARG NODE_MAJOR=22
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl git make gcc g++ libc6-dev pkg-config \
+      python3 python3-venv python3-pip xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz
+RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
+    && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/* \
+    && corepack enable
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+COPY --from=toolbox /out/autophage-toolbox /usr/local/bin/autophage-toolbox
+COPY autophage/deploy/warm-deps /usr/local/bin/warm-deps
+RUN chmod 0755 /usr/local/bin/warm-deps /usr/local/bin/autophage-toolbox \
+    && useradd --uid 1000 --create-home --shell /bin/bash agent \
+    && mkdir -p /work /cache/go/mod /cache/go/build /cache/npm /cache/uv \
+    && chown -R agent:agent /work /cache
+USER agent
+ENV HOME=/home/agent \
+    PATH=/usr/local/go/bin:/home/agent/go/bin:/usr/local/bin:/usr/bin:/bin \
+    GOMODCACHE=/cache/go/mod GOCACHE=/cache/go/build GOFLAGS=-mod=mod GOTOOLCHAIN=local \
+    npm_config_cache=/cache/npm UV_CACHE_DIR=/cache/uv
+WORKDIR /work

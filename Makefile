@@ -1,13 +1,14 @@
 .PHONY: help web-dev server-dev web-build server-build cli-build toolbox-build build \
         server-test web-test test check lint clean \
         install install-launchd uninstall-launchd redeploy redeploy-launchd redeploy-systemd \
-        install-systemd service-restart dev
+        install-systemd service-restart dev image image-test
 
 SHELL := /bin/bash
 
 APP         ?= autophage
 WEB_DIR     := web
 INSTALL_DIR ?= $(HOME)/.local/bin
+IMAGE       ?= localhost/autophage-sandbox:latest
 LAUNCHD_LABEL := dev.grigsby.$(APP)d
 LAUNCHD_PLIST := $(HOME)/Library/LaunchAgents/$(LAUNCHD_LABEL).plist
 SYSTEMD_UNIT  := $(HOME)/.config/systemd/user/$(APP)d.service
@@ -123,6 +124,12 @@ dev: ## Run autophaged watcher + Vite together (both hot-reload)
 	  scripts/dev-watch.sh & \
 	  $(MAKE) web-dev & \
 	  wait
+
+image: ## Build the sandbox image (podman, context is the parent dir for the jess replace)
+	podman build -t $(IMAGE) -f deploy/Containerfile ..
+
+image-test: ## Prove the sandbox image
+	deploy/image_test.sh $(IMAGE)
 
 clean: ## Remove build artifacts
 	rm -f $(APP)d $(APP) autophage-toolbox

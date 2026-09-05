@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Fetch a repository's dependencies from its lockfiles into the cache volumes,
+# in the networked prep container, so the agent phase can run with no network.
+# Never fails the attempt: a fetch that fails is printed and skipped, and the
+# agent finds out when it builds.
+set -uo pipefail
+cd /work || exit 0
+status=0
+try() {
+  local what=$1; shift
+  echo "warm-deps: $what"
+  if ! "$@"; then echo "warm-deps: $what failed (continuing)"; status=1; fi
+}
+[ -f go.mod ] && try "go mod download" go mod download all
+[ -f package-lock.json ] && try "npm ci" npm ci --ignore-scripts --no-audit --no-fund
+[ -f pnpm-lock.yaml ] && try "pnpm install" pnpm install --frozen-lockfile --ignore-scripts
+[ -f uv.lock ] && try "uv sync" uv sync --frozen --no-install-project
+if [ -f requirements.txt ] && [ ! -f uv.lock ]; then echo "warm-deps: requirements.txt without uv.lock; skipped"; fi
+[ $status -eq 0 ] && echo "warm-deps: done" || echo "warm-deps: done with failures"
+exit 0
