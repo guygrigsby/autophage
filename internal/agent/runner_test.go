@@ -319,8 +319,8 @@ func newRunner(t *testing.T, st *store.Store, sb *fakeSandbox, gh *fakeGitHub, m
 	r := &Runner{
 		Store: st, GitHub: gh, Sandbox: sb, Ledger: &memLedger{}, Clock: resolution.SystemClock{},
 		AttemptModel: "test/auto", ApprovedModel: "test/approved", Metrics: m, Logf: logs.logf,
-		CloneURL: func(repo string) string { return "file:///" + repo },
-		model:    model,
+		CloneURL:      func(repo string) string { return "file:///" + repo },
+		ModelOverride: model,
 	}
 	return r, m, logs
 }

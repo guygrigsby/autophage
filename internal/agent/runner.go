@@ -67,10 +67,23 @@ type Runner struct {
 	CloneURL func(repository string) string
 	Logf     func(string, ...any)
 	Metrics  Metrics
+	// ModelOverride replaces the model every tier would build. Test-only:
+	// the daemon leaves it nil, and internal/e2e sets a scripted model so a
+	// whole attempt runs with no OpenRouter key. It is the only seam, so
+	// triage and the attempt take the same route to a model.
+	ModelOverride ac.ChatModel
 
-	model   ac.ChatModel // test seam; nil in production
 	mu      sync.Mutex
 	running map[string]*running
+}
+
+// tier returns ModelOverride when a test set one, and the built tier
+// otherwise.
+func (r *Runner) tier(modelID string) (ac.ChatModel, error) {
+	if r.ModelOverride != nil {
+		return r.ModelOverride, nil
+	}
+	return r.Models.Tier(modelID)
 }
 
 // running is one attempt in flight: the cancel func Stop and Cancel call and
@@ -88,7 +101,7 @@ var _ resolution.Runner = (*Runner)(nil)
 // once at startup, and a missing key must leave every case Received for the
 // next sweep instead of taking the process down.
 func (r *Runner) Triager() resolution.Triager {
-	m, err := r.Models.Tier(r.TriageModel)
+	m, err := r.tier(r.TriageModel)
 	if err != nil {
 		return brokenTriager{err}
 	}
@@ -318,12 +331,9 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	if a.Kind == resolution.Approved && r.ApprovedModel != "" {
 		modelID = r.ApprovedModel
 	}
-	model := r.model
-	if model == nil {
-		model, err = r.Models.Tier(modelID)
-		if err != nil {
-			return setup("model", err)
-		}
+	model, err := r.tier(modelID)
+	if err != nil {
+		return setup("model", err)
 	}
 
 	// Read the caller once here and once when the run returns, both before

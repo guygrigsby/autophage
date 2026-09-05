@@ -1,7 +1,7 @@
 .PHONY: help web-dev server-dev web-build server-build cli-build toolbox-build build \
         server-test web-test test check lint clean \
         install install-launchd uninstall-launchd redeploy redeploy-launchd redeploy-systemd \
-        install-systemd service-restart dev image image-test
+        install-systemd service-restart dev image image-test e2e
 
 SHELL := /bin/bash
 
@@ -151,6 +151,14 @@ image: ## Build the sandbox image from a staged context (this repo + the jess si
 
 image-test: ## Prove the sandbox image
 	deploy/image_test.sh $(IMAGE)
+
+# -count=1 defeats the test cache. Nothing this test depends on is a Go
+# source file: the sandbox image, podman and the database all live outside
+# the cache's view, so a second run of an unchanged tree reports the first
+# run's PASS without starting a container. A green that proves nothing is
+# worse than no target.
+e2e: ## Run the end to end test (needs podman, the image and Docker or AUTOPHAGE_TEST_DSN)
+	go test -tags e2e -count=1 ./internal/e2e/ -run TestEndToEnd -v -timeout 15m
 
 clean: ## Remove build artifacts
 	rm -f $(APP)d $(APP) autophage-toolbox
