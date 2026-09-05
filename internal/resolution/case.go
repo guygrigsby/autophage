@@ -7,7 +7,7 @@ import (
 
 // Case is the aggregate root: one issue in one enrolled repository that
 // autophage is handling. It owns its facts, refuses every transition its
-// table does not list, and tracks what changed since it was loaded so the
+// table does not list and tracks what changed since it was loaded so the
 // store can persist exactly that in one transaction.
 type Case struct {
 	id          string
@@ -107,17 +107,56 @@ func (c *Case) Number() int               { return c.number }
 func (c *Case) Requester() Requester      { return c.requester }
 func (c *Case) State() CaseState          { return c.state }
 func (c *Case) ReceivedAt() time.Time     { return c.receivedAt }
-func (c *Case) Triage() *Triage           { return c.triage }
 func (c *Case) Approvals() []Approval     { return append([]Approval(nil), c.approvals...) }
 func (c *Case) Attempts() []Attempt       { return append([]Attempt(nil), c.attempts...) }
 func (c *Case) Transitions() []Transition { return append([]Transition(nil), c.transitions...) }
-func (c *Case) Closure() *Closure         { return c.closure }
+
+// Triage is a copy of the recorded verdict, or nil before triage. Mutating
+// the result does not reach the aggregate; RecordTriage is the only way in.
+func (c *Case) Triage() *Triage {
+	if c.triage == nil {
+		return nil
+	}
+	t := *c.triage
+	return &t
+}
+
+// Closure is a copy of the recorded closure, or nil while the case is open.
+// Mutating the result does not reach the aggregate; Close is the only way in.
+func (c *Case) Closure() *Closure {
+	if c.closure == nil {
+		return nil
+	}
+	cl := *c.closure
+	return &cl
+}
 
 // Branch is the case's branch name in the repository.
 func (c *Case) Branch() string { return fmt.Sprintf("autophage/%d", c.number) }
 
-// OpenAttempt is the attempt without an outcome, or nil.
+// OpenAttempt is a copy of the attempt without an outcome, or nil. Its Run
+// and Outcome are copied too, so mutating any of them does not reach the
+// aggregate; RecordRun and RecordOutcome are the only way in.
 func (c *Case) OpenAttempt() *Attempt {
+	a := c.openAttempt()
+	if a == nil {
+		return nil
+	}
+	cp := *a
+	if a.Run != nil {
+		r := *a.Run
+		cp.Run = &r
+	}
+	if a.Outcome != nil {
+		o := *a.Outcome
+		cp.Outcome = &o
+	}
+	return &cp
+}
+
+// openAttempt is the real, mutable attempt without an outcome, for commands
+// that need to change it.
+func (c *Case) openAttempt() *Attempt {
 	for i := range c.attempts {
 		if c.attempts[i].Open() {
 			return &c.attempts[i]
@@ -137,6 +176,8 @@ func (c *Case) NextAttemptKind() AttemptKind {
 	}
 	last := c.attempts[len(c.attempts)-1].StartedAt
 	for _, a := range c.approvals {
+		// An approval at the same instant as the attempt's start counts as
+		// after it, hence !Before rather than After.
 		if !a.ApprovedAt.Before(last) {
 			return Approved
 		}
@@ -211,7 +252,7 @@ func (c *Case) StartAttempt(kind AttemptKind, budget Budget, brief string, at ti
 	if c.state != Queued {
 		return Attempt{}, Refused("start attempt in state %s", c.state)
 	}
-	if c.OpenAttempt() != nil {
+	if c.openAttempt() != nil {
 		return Attempt{}, Refused("an attempt is already open")
 	}
 	a := Attempt{Ordinal: len(c.attempts) + 1, Kind: kind, Budget: budget, Brief: brief, StartedAt: at}
@@ -305,7 +346,7 @@ func (c *Case) Close(cl Closure) error {
 // target returns the open attempt, checking attemptID against it when both
 // are known.
 func (c *Case) target(attemptID string) (*Attempt, error) {
-	a := c.OpenAttempt()
+	a := c.openAttempt()
 	if a == nil {
 		return nil, Refused("no open attempt")
 	}

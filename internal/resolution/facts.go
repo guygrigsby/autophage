@@ -55,6 +55,9 @@ type Attempt struct {
 // Open reports whether the attempt has no outcome yet.
 func (a Attempt) Open() bool { return a.Outcome == nil }
 
+// Elapsed is how long the attempt has been running as of now.
+func (a Attempt) Elapsed(now time.Time) time.Duration { return now.Sub(a.StartedAt) }
+
 // Run exists once the agent began executing.
 type Run struct {
 	RunID   string

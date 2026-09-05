@@ -321,3 +321,23 @@ func TestLoadCaseRoundTrips(t *testing.T) {
 		t.Error("trusted requester in gated state accepted")
 	}
 }
+
+func TestOpenAttemptIsACopy(t *testing.T) {
+	c := driveTo(t, Attempting)
+	a := c.OpenAttempt()
+	o, _ := OutcomeFailed(FailureInfra, "leaked", Usage{}, t0)
+	a.Outcome = &o
+	if c.OpenAttempt() == nil {
+		t.Error("mutating the returned attempt closed the real one")
+	}
+	if len(c.Changes().Outcomes) != 0 {
+		t.Errorf("mutating the returned attempt changed Changes(): %+v", c.Changes())
+	}
+}
+
+func TestAttemptElapsed(t *testing.T) {
+	a := Attempt{StartedAt: t0}
+	if got := a.Elapsed(t0.Add(time.Hour)); got != time.Hour {
+		t.Errorf("elapsed = %s", got)
+	}
+}
