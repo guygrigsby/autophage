@@ -394,7 +394,7 @@ Value object, owned by `Repository`, table `repository_removals`.
 
 **Trust**: `trusted`, `untrusted`.
 
-**Association**: `owner`, `member`, `collaborator`, `contributor`, `first_time_contributor`, `first_timer`, `none`. GitHub's closed set, recorded as evidence.
+**Association**: `owner`, `member`, `collaborator`, `contributor`, `first_time_contributor`, `first_timer`, `mannequin`, `none`. GitHub's closed set, recorded as evidence.
 
 **Size**: `small`, `large`.
 

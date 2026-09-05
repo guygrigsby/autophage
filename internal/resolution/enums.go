@@ -49,11 +49,12 @@ const (
 	AssociationContributor          Association = "contributor"
 	AssociationFirstTimeContributor Association = "first_time_contributor"
 	AssociationFirstTimer           Association = "first_timer"
+	AssociationMannequin            Association = "mannequin"
 	AssociationNone                 Association = "none"
 )
 
 func AllAssociations() []Association {
-	return []Association{AssociationOwner, AssociationMember, AssociationCollaborator, AssociationContributor, AssociationFirstTimeContributor, AssociationFirstTimer, AssociationNone}
+	return []Association{AssociationOwner, AssociationMember, AssociationCollaborator, AssociationContributor, AssociationFirstTimeContributor, AssociationFirstTimer, AssociationMannequin, AssociationNone}
 }
 
 // ParseAssociation accepts GitHub's upper-case spelling as well as ours.

@@ -13,6 +13,7 @@ func TestNewRequesterDerivesTrust(t *testing.T) {
 		{AssociationContributor, Untrusted},
 		{AssociationFirstTimeContributor, Untrusted},
 		{AssociationFirstTimer, Untrusted},
+		{AssociationMannequin, Untrusted},
 		{AssociationNone, Untrusted},
 	}
 	for _, c := range cases {

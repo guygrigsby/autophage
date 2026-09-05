@@ -6,7 +6,7 @@ CREATE TABLE trusts             (trust TEXT PRIMARY KEY);
 INSERT INTO trusts VALUES ('trusted'), ('untrusted');
 
 CREATE TABLE associations       (association TEXT PRIMARY KEY);
-INSERT INTO associations VALUES ('owner'), ('member'), ('collaborator'), ('contributor'), ('first_time_contributor'), ('first_timer'), ('none');
+INSERT INTO associations VALUES ('owner'), ('member'), ('collaborator'), ('contributor'), ('first_time_contributor'), ('first_timer'), ('mannequin'), ('none');
 
 CREATE TABLE sizes              (size TEXT PRIMARY KEY);
 INSERT INTO sizes VALUES ('small'), ('large');
