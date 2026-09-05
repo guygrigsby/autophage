@@ -1,0 +1,260 @@
+package github
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/bradleyfalzon/ghinstallation/v2"
+	gh "github.com/google/go-github/v88/github"
+
+	"github.com/guygrigsby/autophage/internal/resolution"
+)
+
+// ClientConfig configures the App client. BaseURL is for tests; empty means
+// api.github.com. Installations resolves a repository to its installation id
+// (the daemon wires the store).
+type ClientConfig struct {
+	AppID         int64
+	PrivateKeyPEM []byte
+	BaseURL       string
+	UserAgent     string
+	Installations func(ctx context.Context, repository string) (int64, error)
+}
+
+// Client implements resolution.GitHub over the GitHub App. One installation
+// transport per installation id and repository name, built lazily and cached.
+type Client struct {
+	cfg  ClientConfig
+	apps *ghinstallation.AppsTransport
+	mu   sync.Mutex
+	inst map[string]*ghinstallation.Transport
+}
+
+var _ resolution.GitHub = (*Client)(nil)
+
+func NewClient(cfg ClientConfig) (*Client, error) {
+	if cfg.AppID <= 0 || len(cfg.PrivateKeyPEM) == 0 || cfg.Installations == nil {
+		return nil, errors.New("github: app id, private key and installation resolver are required")
+	}
+	if cfg.UserAgent == "" {
+		cfg.UserAgent = "autophage"
+	}
+	apps, err := ghinstallation.NewAppsTransport(http.DefaultTransport, cfg.AppID, cfg.PrivateKeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("github: app transport: %w", err)
+	}
+	if cfg.BaseURL != "" {
+		apps.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
+	}
+	return &Client{cfg: cfg, apps: apps, inst: map[string]*ghinstallation.Transport{}}, nil
+}
+
+// transport returns the cached installation transport for (id, repoName).
+// The token is scoped to that one repository name; ghinstallation caches
+// the token inside the transport and renews it on expiry, so one transport
+// per repository means one mint per hour, not per call.
+func (c *Client) transport(id int64, repoName string) *ghinstallation.Transport {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := fmt.Sprintf("%d/%s", id, repoName)
+	if tr, ok := c.inst[key]; ok {
+		return tr
+	}
+	tr := ghinstallation.NewFromAppsTransport(c.apps, id)
+	tr.InstallationTokenOptions = &gh.InstallationTokenOptions{Repositories: []string{repoName}}
+	if c.cfg.BaseURL != "" {
+		tr.BaseURL = strings.TrimRight(c.cfg.BaseURL, "/")
+	}
+	c.inst[key] = tr
+	return tr
+}
+
+// api builds a go-github client for the repository's installation with the
+// token scoped to that repository. go-github v88 configures everything
+// through functional options; WithURLs only validates the URL shape (unlike
+// WithEnterpriseURLs it does not append an api/v3 prefix), which is what the
+// httptest fake needs.
+func (c *Client) api(ctx context.Context, repository string) (*gh.Client, error) {
+	id, err := c.cfg.Installations(ctx, repository)
+	if err != nil {
+		return nil, err
+	}
+	_, name := splitRepo(repository)
+	opts := []gh.ClientOptionsFunc{
+		gh.WithTransport(&retryTransport{next: c.transport(id, name)}),
+		gh.WithUserAgent(c.cfg.UserAgent),
+	}
+	if c.cfg.BaseURL != "" {
+		base := strings.TrimRight(c.cfg.BaseURL, "/") + "/"
+		opts = append(opts, gh.WithURLs(gh.Ptr(base), gh.Ptr(base)))
+	}
+	client, err := gh.NewClient(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("github: build client: %w", err)
+	}
+	return client, nil
+}
+
+func splitRepo(full string) (owner, name string) {
+	owner, name, _ = strings.Cut(full, "/")
+	return owner, name
+}
+
+func (c *Client) MintToken(ctx context.Context, repo resolution.Repository) (resolution.Token, error) {
+	_, name := repo.OwnerName()
+	tr := c.transport(repo.InstallationID, name)
+	tok, err := tr.Token(ctx)
+	if err != nil {
+		return resolution.Token{}, fmt.Errorf("github: mint token for %s: %w", repo.FullName, err)
+	}
+	exp, _, err := tr.Expiry()
+	if err != nil {
+		exp = time.Now().Add(55 * time.Minute)
+	}
+	return resolution.Token{Value: tok, ExpiresAt: exp}, nil
+}
+
+// DefaultBranch reads the repository's default branch; the runner refreshes
+// the store with it before an attempt.
+func (c *Client) DefaultBranch(ctx context.Context, repo resolution.Repository) (string, error) {
+	api, err := c.api(ctx, repo.FullName)
+	if err != nil {
+		return "", err
+	}
+	owner, name := repo.OwnerName()
+	r, _, err := api.Repositories.Get(ctx, owner, name)
+	if err != nil {
+		return "", fmt.Errorf("github: get %s: %w", repo.FullName, err)
+	}
+	return r.GetDefaultBranch(), nil
+}
+
+func (c *Client) GetIssue(ctx context.Context, repository string, number int) (resolution.IssueDetail, error) {
+	api, err := c.api(ctx, repository)
+	if err != nil {
+		return resolution.IssueDetail{}, err
+	}
+	owner, name := splitRepo(repository)
+	is, _, err := api.Issues.Get(ctx, owner, name, number)
+	if err != nil {
+		return resolution.IssueDetail{}, fmt.Errorf("github: get issue %s#%d: %w", repository, number, err)
+	}
+	assoc, err := resolution.ParseAssociation(is.GetAuthorAssociation())
+	if err != nil {
+		return resolution.IssueDetail{}, err
+	}
+	req, err := resolution.NewRequester(is.GetUser().GetLogin(), assoc)
+	if err != nil {
+		return resolution.IssueDetail{}, err
+	}
+	return resolution.IssueDetail{Title: is.GetTitle(), Body: is.GetBody(), Requester: req, Open: is.GetState() == "open"}, nil
+}
+
+func (c *Client) PostComment(ctx context.Context, repository string, number int, body string) (int64, error) {
+	api, err := c.api(ctx, repository)
+	if err != nil {
+		return 0, err
+	}
+	owner, name := splitRepo(repository)
+	cm, _, err := api.Issues.CreateComment(ctx, owner, name, number, &gh.IssueComment{Body: gh.Ptr(neutraliseMentions(body))})
+	if err != nil {
+		return 0, fmt.Errorf("github: comment on %s#%d: %w", repository, number, err)
+	}
+	return cm.GetID(), nil
+}
+
+func (c *Client) OpenPullRequest(ctx context.Context, repository, head, base, title, body string) (int, error) {
+	api, err := c.api(ctx, repository)
+	if err != nil {
+		return 0, err
+	}
+	owner, name := splitRepo(repository)
+	pr, _, err := api.PullRequests.Create(ctx, owner, name, &gh.NewPullRequest{Title: gh.Ptr(title), Head: gh.Ptr(head), Base: gh.Ptr(base), Body: gh.Ptr(neutraliseMentions(body))})
+	if err != nil {
+		return 0, fmt.Errorf("github: open pull request on %s: %w", repository, err)
+	}
+	return pr.GetNumber(), nil
+}
+
+// EnsureLabel creates the label when it is missing. Idempotent.
+func (c *Client) EnsureLabel(ctx context.Context, repository, label string) error {
+	api, err := c.api(ctx, repository)
+	if err != nil {
+		return err
+	}
+	owner, name := splitRepo(repository)
+	_, resp, err := api.Issues.GetLabel(ctx, owner, name, label)
+	if err == nil {
+		return nil
+	}
+	if resp == nil || resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("github: get label %s on %s: %w", label, repository, err)
+	}
+	_, _, err = api.Issues.CreateLabel(ctx, owner, name, &gh.Label{Name: gh.Ptr(label), Color: gh.Ptr("0e8a16"), Description: gh.Ptr("autophage may act on this issue")})
+	if err != nil {
+		return fmt.Errorf("github: create label %s on %s: %w", label, repository, err)
+	}
+	return nil
+}
+
+// neutraliseMentions puts a zero-width space after every @ so a posted body
+// cannot ping people.
+func neutraliseMentions(s string) string { return strings.ReplaceAll(s, "@", "@\u200b") }
+
+// retryTransport honors Retry-After on 403 and 429 up to twice, sleeping at
+// most 60s each time, then hands the response back.
+type retryTransport struct{ next http.RoundTripper }
+
+func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for attempt := range 3 {
+		// The first attempt drains req.Body over the wire; a retry must
+		// rewind it from GetBody (net/http populates this for buffer- and
+		// reader-backed bodies) or the resend goes out with an empty body
+		// while Content-Length still claims the original size.
+		if attempt > 0 && req.GetBody != nil {
+			body, err := req.GetBody()
+			if err != nil {
+				return nil, err
+			}
+			req.Body = body
+		}
+		resp, err := t.next.RoundTrip(req)
+		if err != nil {
+			return nil, err
+		}
+		if (resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusTooManyRequests) || attempt == 2 {
+			return resp, nil
+		}
+		wait := retryAfter(resp.Header.Get("Retry-After"))
+		if wait <= 0 {
+			return resp, nil
+		}
+		_ = resp.Body.Close()
+		select {
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		case <-time.After(wait):
+		}
+	}
+	return nil, errors.New("unreachable")
+}
+
+// retryAfter parses the seconds or HTTP-date forms, capped at 60s.
+func retryAfter(v string) time.Duration {
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		return min(time.Duration(secs)*time.Second, 60*time.Second)
+	}
+	if at, err := http.ParseTime(v); err == nil {
+		return min(max(time.Until(at), 0), 60*time.Second)
+	}
+	return 0
+}
