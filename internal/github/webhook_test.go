@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/guygrigsby/autophage/internal/resolution"
-	"github.com/guygrigsby/autophage/internal/store"
+	"github.com/guygrigsby/autophage/internal/storetest"
 )
 
 var secret = []byte("s3cret")
@@ -52,7 +52,7 @@ func post(t *testing.T, h http.Handler, event, delivery string, body []byte, sig
 }
 
 func TestWebhookStoresVerifiedDelivery(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	h := WebhookHandler(st, secret, resolution.SystemClock{})
 	body := fixture(t, "issues_opened.json")
 	rec := post(t, h, "issues", "d-1", body, sign(body))
@@ -79,7 +79,7 @@ func TestWebhookStoresVerifiedDelivery(t *testing.T) {
 }
 
 func TestWebhookRejectsBadSignatureAndMissingHeaders(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	h := WebhookHandler(st, secret, resolution.SystemClock{})
 	body := fixture(t, "issues_opened.json")
 	if rec := post(t, h, "issues", "d-2", body, "sha256=deadbeef"); rec.Code != http.StatusUnauthorized {

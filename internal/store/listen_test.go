@@ -1,4 +1,4 @@
-package store
+package store_test
 
 import (
 	"context"
@@ -6,10 +6,11 @@ import (
 	"time"
 
 	"github.com/guygrigsby/autophage/internal/resolution"
+	"github.com/guygrigsby/autophage/internal/storetest"
 )
 
 func TestListenReceivesCaseNotifications(t *testing.T) {
-	s := OpenTest(t)
+	s := storetest.Open(t)
 	seedRepo(t, s, "guy/repo")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

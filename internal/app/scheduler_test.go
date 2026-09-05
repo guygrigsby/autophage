@@ -8,6 +8,7 @@ import (
 
 	"github.com/guygrigsby/autophage/internal/resolution"
 	"github.com/guygrigsby/autophage/internal/store"
+	"github.com/guygrigsby/autophage/internal/storetest"
 )
 
 // fakeRunner records attempts and blocks each until released, so the
@@ -62,7 +63,7 @@ func policy(t *testing.T) BudgetPolicy {
 }
 
 func TestSchedulerStartsInOrderWithinConcurrency(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	queueCases(t, st, 1, 2, 3)
 	gh := &fakeGitHub{issues: map[string]resolution.IssueDetail{}}
 	for _, n := range []int{1, 2, 3} {
@@ -102,7 +103,7 @@ func TestSchedulerStartsInOrderWithinConcurrency(t *testing.T) {
 }
 
 func TestSchedulerSkipsClosedIssue(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	queueCases(t, st, 1)
 	gh := &fakeGitHub{issues: map[string]resolution.IssueDetail{keyOf("guy/repo", 1): issue(false)}}
 	runner := &fakeRunner{release: make(chan struct{})}

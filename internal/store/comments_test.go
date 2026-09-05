@@ -1,14 +1,15 @@
-package store
+package store_test
 
 import (
 	"testing"
 	"time"
 
 	"github.com/guygrigsby/autophage/internal/resolution"
+	"github.com/guygrigsby/autophage/internal/storetest"
 )
 
 func TestCommentOutbox(t *testing.T) {
-	s := OpenTest(t)
+	s := storetest.Open(t)
 	seedRepo(t, s, "guy/repo")
 	ctx := t.Context()
 	newCase(t, s, 7, owner(t))

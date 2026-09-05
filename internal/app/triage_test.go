@@ -9,6 +9,7 @@ import (
 
 	"github.com/guygrigsby/autophage/internal/resolution"
 	"github.com/guygrigsby/autophage/internal/store"
+	"github.com/guygrigsby/autophage/internal/storetest"
 )
 
 var t0 = time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
@@ -86,7 +87,7 @@ func issue(open bool) resolution.IssueDetail {
 }
 
 func TestTriageSizesReceivedCases(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	seed(t, st)
 	gh := &fakeGitHub{issues: map[string]resolution.IssueDetail{keyOf("guy/repo", 7): issue(true)}}
 	tr := &Triage{Store: st, Triager: fakeTriager{size: resolution.Large}, GitHub: gh, Clock: fixedClock{t0}}
@@ -100,7 +101,7 @@ func TestTriageSizesReceivedCases(t *testing.T) {
 }
 
 func TestTriageRetriesAfterModelFailure(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	seed(t, st)
 	gh := &fakeGitHub{issues: map[string]resolution.IssueDetail{keyOf("guy/repo", 7): issue(true)}}
 	tr := &Triage{Store: st, Triager: fakeTriager{err: errors.New("model down")}, GitHub: gh, Clock: fixedClock{t0}}

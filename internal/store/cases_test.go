@@ -1,4 +1,4 @@
-package store
+package store_test
 
 import (
 	"errors"
@@ -6,9 +6,11 @@ import (
 	"time"
 
 	"github.com/guygrigsby/autophage/internal/resolution"
+	"github.com/guygrigsby/autophage/internal/store"
+	"github.com/guygrigsby/autophage/internal/storetest"
 )
 
-func seedRepo(t *testing.T, s *Store, name string) {
+func seedRepo(t *testing.T, s *store.Store, name string) {
 	t.Helper()
 	r, _ := resolution.NewRepository(name, 42, "main", t0)
 	if err := s.EnrollRepository(t.Context(), r); err != nil {
@@ -25,7 +27,7 @@ func owner(t *testing.T) resolution.Requester {
 	return r
 }
 
-func newCase(t *testing.T, s *Store, number int, req resolution.Requester) *resolution.Case {
+func newCase(t *testing.T, s *store.Store, number int, req resolution.Requester) *resolution.Case {
 	t.Helper()
 	c, err := resolution.NewCase("guy/repo", number, req, t0)
 	if err != nil {
@@ -38,7 +40,7 @@ func newCase(t *testing.T, s *Store, number int, req resolution.Requester) *reso
 }
 
 func TestCreateAndGetCase(t *testing.T) {
-	s := OpenTest(t)
+	s := storetest.Open(t)
 	seedRepo(t, s, "guy/repo")
 	c := newCase(t, s, 7, owner(t))
 	if c.ID() == "" {
@@ -48,16 +50,16 @@ func TestCreateAndGetCase(t *testing.T) {
 	if err != nil || got.ID() != c.ID() || got.State() != resolution.Received || got.Requester().Login != "guy" {
 		t.Fatalf("get = %+v %v", got, err)
 	}
-	if err := s.CreateCase(t.Context(), c); !errors.Is(err, ErrConflict) {
+	if err := s.CreateCase(t.Context(), c); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("duplicate = %v", err)
 	}
-	if _, err := s.GetCase(t.Context(), "guy/repo", 8); !errors.Is(err, ErrNotFound) {
+	if _, err := s.GetCase(t.Context(), "guy/repo", 8); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("missing = %v", err)
 	}
 }
 
 func TestUpdateCasePersistsEveryFact(t *testing.T) {
-	s := OpenTest(t)
+	s := storetest.Open(t)
 	seedRepo(t, s, "guy/repo")
 	newCase(t, s, 7, owner(t))
 	ctx := t.Context()
@@ -122,7 +124,7 @@ func TestUpdateCasePersistsEveryFact(t *testing.T) {
 }
 
 func TestUpdateCaseRollsBackOnRefusal(t *testing.T) {
-	s := OpenTest(t)
+	s := storetest.Open(t)
 	seedRepo(t, s, "guy/repo")
 	newCase(t, s, 7, owner(t))
 	_, err := s.UpdateCase(t.Context(), "guy/repo", 7, func(c *resolution.Case) error {
@@ -139,7 +141,7 @@ func TestUpdateCaseRollsBackOnRefusal(t *testing.T) {
 }
 
 func TestQueries(t *testing.T) {
-	s := OpenTest(t)
+	s := storetest.Open(t)
 	seedRepo(t, s, "guy/repo")
 	seedRepo(t, s, "guy/gone")
 	ctx := t.Context()
@@ -190,15 +192,15 @@ func TestQueries(t *testing.T) {
 	if counts["attempting"] != 1 || counts["queued"] != 2 || counts["gated"] != 1 {
 		t.Errorf("counts = %+v", counts)
 	}
-	rows, next, err := s.ListCases(ctx, CaseFilter{Repository: "guy/repo", Limit: 2})
+	rows, next, err := s.ListCases(ctx, store.CaseFilter{Repository: "guy/repo", Limit: 2})
 	if err != nil || len(rows) != 2 || next == "" {
 		t.Fatalf("page 1 = %+v %q %v", rows, next, err)
 	}
-	rows2, next2, err := s.ListCases(ctx, CaseFilter{Repository: "guy/repo", Limit: 2, After: next})
+	rows2, next2, err := s.ListCases(ctx, store.CaseFilter{Repository: "guy/repo", Limit: 2, After: next})
 	if err != nil || len(rows2) != 1 || next2 != "" {
 		t.Errorf("page 2 = %+v %q %v", rows2, next2, err)
 	}
-	gated, _, _ := s.ListCases(ctx, CaseFilter{State: "gated", Limit: 10})
+	gated, _, _ := s.ListCases(ctx, store.CaseFilter{State: "gated", Limit: 10})
 	if len(gated) != 1 || gated[0].Number != 3 || gated[0].LatestOutcomeKind != "none" {
 		t.Errorf("gated = %+v", gated)
 	}

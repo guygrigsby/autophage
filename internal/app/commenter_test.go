@@ -5,11 +5,11 @@ import (
 	"testing"
 
 	"github.com/guygrigsby/autophage/internal/resolution"
-	"github.com/guygrigsby/autophage/internal/store"
+	"github.com/guygrigsby/autophage/internal/storetest"
 )
 
 func TestCommenterPostsTriageAndOutcomeOnceEach(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	seed(t, st)
 	ctx := t.Context()
 	if _, err := st.UpdateCase(ctx, "guy/repo", 7, func(c *resolution.Case) error {

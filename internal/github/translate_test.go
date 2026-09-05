@@ -6,6 +6,7 @@ import (
 
 	"github.com/guygrigsby/autophage/internal/resolution"
 	"github.com/guygrigsby/autophage/internal/store"
+	"github.com/guygrigsby/autophage/internal/storetest"
 )
 
 type fixedClock struct{ t time.Time }
@@ -38,7 +39,7 @@ func newTranslator(st *store.Store) *Translator {
 }
 
 func TestTranslateInstallationThenIssueLifecycle(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	ctx := t.Context()
 	tr := newTranslator(st)
 
@@ -103,7 +104,7 @@ func TestTranslateInstallationThenIssueLifecycle(t *testing.T) {
 }
 
 func TestTranslateIgnoresUnenrolledOwnAndUnsubscribed(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	ctx := t.Context()
 	tr := newTranslator(st)
 	deliver(t, st, "d-open", "issues", "issues_opened.json")
@@ -125,7 +126,7 @@ func TestTranslateIgnoresUnenrolledOwnAndUnsubscribed(t *testing.T) {
 }
 
 func TestLabelBeforeOpenCreatesThenApproves(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	ctx := t.Context()
 	tr := newTranslator(st)
 	deliver(t, st, "d-inst", "installation", "installation_created.json")

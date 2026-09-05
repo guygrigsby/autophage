@@ -8,11 +8,11 @@ import (
 
 	"github.com/guygrigsby/autophage/internal/github"
 	"github.com/guygrigsby/autophage/internal/resolution"
-	"github.com/guygrigsby/autophage/internal/store"
+	"github.com/guygrigsby/autophage/internal/storetest"
 )
 
 func TestRecoveryAbortsOpenAttemptsOnce(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	queueCases(t, st, 1)
 	b, _ := resolution.NewBudget(10, time.Hour, 500)
 	if _, err := st.UpdateCase(t.Context(), "guy/repo", 1, func(c *resolution.Case) error {
@@ -32,7 +32,7 @@ func TestRecoveryAbortsOpenAttemptsOnce(t *testing.T) {
 }
 
 func TestDispatcherSweepWakesOnNotify(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	gh := &fakeGitHub{issues: map[string]resolution.IssueDetail{}}
 	runner := &fakeRunner{release: make(chan struct{})}
 	d := &Dispatcher{
@@ -103,7 +103,7 @@ func (b *blockingTriager) Classify(ctx context.Context, _, _ string) (resolution
 // with an earlier case is still dispatched, with no further external
 // trigger, once the boot sweep finishes.
 func TestDispatcherCatchesNotifyDuringBootSweep(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	r, _ := resolution.NewRepository("guy/repo", 42, "main", t0)
 	if err := st.EnrollRepository(t.Context(), r); err != nil {
 		t.Fatal(err)

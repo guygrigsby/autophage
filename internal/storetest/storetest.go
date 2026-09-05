@@ -1,0 +1,92 @@
+// Package storetest starts a real Postgres for tests that need one. It is
+// separate from internal/store on purpose: the harness pulls testcontainers
+// and the Docker client in, and a package the daemon imports must not carry
+// those into the shipped binary.
+package storetest
+
+import (
+	"context"
+	"os"
+	"sync"
+	"testing"
+	"time"
+
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+
+	"github.com/guygrigsby/autophage/internal/store"
+)
+
+var (
+	testOnce     sync.Once
+	testDSN      string
+	testExplicit bool
+	testErr      error
+)
+
+// skipper is the subset of *testing.T that skipOrFatal needs, so the skip
+// versus fatal decision is testable without a real *testing.T's Goexit-on-
+// Fatal behavior.
+type skipper interface {
+	Helper()
+	Skipf(format string, args ...any)
+	Fatalf(format string, args ...any)
+}
+
+// skipOrFatal reports a container-start failure: a skip when the DSN was to
+// be testcontainers-managed (any failure there, whatever its message, is
+// environmental: Docker absent, daemon unreachable, image pull failed), or a
+// fatal failure when the operator supplied AUTOPHAGE_TEST_DSN explicitly (a
+// real, actionable failure; this branch is dead today, since the container
+// is never started when a DSN was supplied, but keeps the helper correct if
+// that ever changes). It is never used for an Open failure: once a database
+// is reachable, Open failing (connect, ping, migrate) is always a real bug.
+func skipOrFatal(t skipper, err error, explicitDSN bool) {
+	t.Helper()
+	if explicitDSN {
+		t.Fatalf("open store: %v", err)
+		return
+	}
+	t.Skipf("postgres testcontainer unavailable (%v); set AUTOPHAGE_TEST_DSN to use a server", err)
+}
+
+// Open returns a migrated Store on a real Postgres 17 started once per test
+// binary through testcontainers, with every non-vocabulary table truncated
+// when the test ends. It skips when Docker is unreachable and
+// AUTOPHAGE_TEST_DSN is unset; set that variable to use an existing server.
+func Open(t *testing.T) *store.Store {
+	t.Helper()
+	testOnce.Do(func() {
+		if dsn := os.Getenv("AUTOPHAGE_TEST_DSN"); dsn != "" {
+			testDSN = dsn
+			testExplicit = true
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		ctr, err := tcpostgres.Run(ctx, "postgres:17-alpine",
+			tcpostgres.WithDatabase("autophage"), tcpostgres.WithUsername("autophage"), tcpostgres.WithPassword("autophage"),
+			tcpostgres.BasicWaitStrategies())
+		if err != nil {
+			testErr = err
+			return
+		}
+		testDSN, testErr = ctr.ConnectionString(ctx, "sslmode=disable")
+	})
+	if testErr != nil {
+		skipOrFatal(t, testErr, testExplicit)
+	}
+	// Once the container (or an operator-supplied server) is up, a failure
+	// to connect, ping or migrate is a real bug, not an environmental one:
+	// always fatal, on both the container path and the explicit-DSN path.
+	s, err := store.Open(t.Context(), testDSN)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = s.Truncate(ctx)
+		s.Close()
+	})
+	return s
+}

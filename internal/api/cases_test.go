@@ -14,6 +14,7 @@ import (
 	"github.com/guygrigsby/autophage/internal/auth"
 	"github.com/guygrigsby/autophage/internal/resolution"
 	"github.com/guygrigsby/autophage/internal/store"
+	"github.com/guygrigsby/autophage/internal/storetest"
 )
 
 var t0 = time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
@@ -90,7 +91,7 @@ func do(t *testing.T, srv *httptest.Server, tok, method, path string) (int, map[
 }
 
 func TestStatusCasesRunAndStop(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	ctx := t.Context()
 	r, _ := resolution.NewRepository("guy/repo", 42, "main", t0)
 	if err := st.EnrollRepository(ctx, r); err != nil {
@@ -180,7 +181,7 @@ func TestStatusCasesRunAndStop(t *testing.T) {
 // only a genuine upstream failure (network, auth, rate limit) should read as
 // upstream_unavailable.
 func TestRunMapsIssueNotFoundToNotFound(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	ctx := t.Context()
 	r, _ := resolution.NewRepository("guy/repo", 42, "main", t0)
 	if err := st.EnrollRepository(ctx, r); err != nil {
@@ -200,7 +201,7 @@ func TestRunMapsIssueNotFoundToNotFound(t *testing.T) {
 // before the GitHub call: an issue already closed upstream, and a repository
 // no longer enrolled.
 func TestRunRefusesClosedIssueOrRemovedRepository(t *testing.T) {
-	st := store.OpenTest(t)
+	st := storetest.Open(t)
 	ctx := t.Context()
 	r, _ := resolution.NewRepository("guy/repo", 42, "main", t0)
 	if err := st.EnrollRepository(ctx, r); err != nil {

@@ -1,4 +1,4 @@
-package store
+package store_test
 
 import (
 	"errors"
@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/guygrigsby/autophage/internal/resolution"
+	"github.com/guygrigsby/autophage/internal/store"
+	"github.com/guygrigsby/autophage/internal/storetest"
 )
 
 var t0 = time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 
 func TestEnrollGetRemoveReenroll(t *testing.T) {
-	s := OpenTest(t)
+	s := storetest.Open(t)
 	ctx := t.Context()
 	r, _ := resolution.NewRepository("guy/repo", 42, "main", t0)
 	if err := s.EnrollRepository(ctx, r); err != nil {
@@ -21,7 +23,7 @@ func TestEnrollGetRemoveReenroll(t *testing.T) {
 	if err != nil || got.InstallationID != 42 || got.DefaultBranch != "main" || !got.Enrolled() {
 		t.Fatalf("get = %+v %v", got, err)
 	}
-	if _, err := s.GetRepository(ctx, "guy/nope"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.GetRepository(ctx, "guy/nope"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("missing = %v", err)
 	}
 	if err := s.RemoveRepository(ctx, "guy/repo", t0.Add(time.Hour)); err != nil {
@@ -42,7 +44,7 @@ func TestEnrollGetRemoveReenroll(t *testing.T) {
 }
 
 func TestRepositoriesNeedingLabel(t *testing.T) {
-	s := OpenTest(t)
+	s := storetest.Open(t)
 	ctx := t.Context()
 	a, _ := resolution.NewRepository("guy/a", 1, "main", t0)
 	b, _ := resolution.NewRepository("guy/b", 1, "main", t0)
