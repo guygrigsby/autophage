@@ -29,3 +29,34 @@ The container is the security boundary, not the gate.
 - The agent can write anything it read into the PR. Bounded to repository content; the PR is reviewed before merge regardless.
 - `bash` is allowed here where gyr forbids it. Different boundary, different rule: gyr's bash ran on the operator's machine behind a tap; this bash runs in a disposable container with nothing to reach.
 - Every `podman exec` is a process spawn per tool call. Acceptable at the call rates involved; the toolbox is a long-lived process per attempt, so the exec cost is paid once and calls go over stdio.
+
+## 2026-09-05: prep-phase egress, and what is still open
+
+Added after the sandbox implementation review. The decision above stands; this
+records what the networked prep container can still reach and why that is
+accepted for now.
+
+The prep container is the one phase with a network, and it runs on lockfiles a
+previous attempt may have committed. That is a real, if narrow, exfiltration
+and fetch channel: an agent that writes a lockfile in one attempt makes the
+next attempt's prep container connect to whatever hosts that lockfile names,
+before any human has reviewed the pull request.
+
+Narrowed for Go: the prep container runs with `GOPROXY=https://proxy.golang.org`
+with no `,direct` fallback, `GOFLAGS=-mod=readonly` and `GOSUMDB=sum.golang.org`,
+so a `go.mod` cannot send the fetch to an arbitrary host and the phase cannot
+rewrite `go.mod` to widen its own reach.
+
+Accepted residual: npm and uv still follow the URLs in their own lockfiles
+(`resolved` in `package-lock.json`, `url` in `uv.lock`), so a committed
+lockfile can still name a host of the attacker's choosing for those two. The
+fix is an egress allowlist for the prep container (a podman network with
+nftables rules or a forward proxy), tracked as beads issue `autophage-e43`.
+Until then the exposure is bounded by what the prep phase holds, which is the
+repository's own source and no secrets: no model key, no installation token,
+no database.
+
+Also accepted: memory, cpu and pids are bounded per container, disk is not. An
+attempt can fill the host's disk from `bash`, and the caches it fills are read
+by the next attempt on the same repository. Quotas and a cache-discard policy
+are tracked as beads issue `autophage-7d4`.
