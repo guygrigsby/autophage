@@ -1,0 +1,10 @@
+# Modest, non-pedantic. Standard correctness linters; no style nags.
+version: "2"
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused

@@ -1,0 +1,2 @@
+# Copy to ~/.config/app/config.toml. All keys are optional; defaults shown.
+listen = ":8080"

@@ -1,0 +1,10 @@
+# Build artifacts
+/appd
+/app
+/bin/
+# Built web assets (the dir is kept by web/dist/.gitkeep; assets are not committed)
+/web/dist/*
+!/web/dist/.gitkeep
+/web/node_modules/
+# beads local db
+/.beads/*.db
