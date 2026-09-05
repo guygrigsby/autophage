@@ -62,10 +62,12 @@ RUN curl -LsSf --retry 3 "https://astral.sh/uv/${UV_VERSION}/install.sh" | env U
 
 # pnpm: baked in at build time via corepack, pinned to an exact version,
 # rather than left for an agent's first `pnpm` invocation to fetch (which
-# would need network in the no-network agent phase and would land in
-# $HOME/.cache/node/corepack, off the mounted cache volumes). COREPACK_HOME
-# persists into the runtime environment below so the activated shim finds
-# this pinned pnpm instead of trying to fetch one.
+# would need network in the no-network agent phase). /opt/corepack is the
+# seed only: the runtime COREPACK_HOME below points at the /cache/npm
+# volume, which warm-deps fills from this copy on a repository's first
+# attempt. A repository that pins a different pnpm in its packageManager
+# field then gets it fetched into its own volume in the networked prep
+# phase, where the agent phase can still reach it with no network.
 ENV COREPACK_HOME=/opt/corepack
 RUN corepack enable \
     && corepack prepare "pnpm@${PNPM_VERSION}" --activate \
@@ -75,18 +77,26 @@ COPY --from=toolbox /out/autophage-toolbox /usr/local/bin/autophage-toolbox
 COPY autophage/deploy/warm-deps /usr/local/bin/warm-deps
 RUN chmod 0755 /usr/local/bin/warm-deps /usr/local/bin/autophage-toolbox \
     && useradd --uid 1000 --create-home --shell /bin/bash agent \
-    && mkdir -p /work /cache/go/mod /cache/go/build /cache/npm /cache/npm/pnpm-store /cache/uv \
+    && mkdir -p /work /cache/go/mod /cache/go/build /cache/npm /cache/npm/pnpm-store \
+       /cache/npm/corepack /cache/uv /cache/uv/python \
     && chown -R agent:agent /work /cache
 USER agent
 # GOFLAGS keeps -mod=mod: an attempt may need to touch go.mod/go.sum. GOPROXY=off
 # is set by the daemon at run time for the agent phase, on top of this; the real
 # backstop against network use is --network=none on the container, not the
-# proxy setting. npm_config_store_dir moves pnpm's content-addressable store
-# from its default (~/.local/share/pnpm/store, off the cache volumes) onto the
-# mounted /cache/npm so warm-deps and the agent phase share it like npm's own
-# npm_config_cache does.
+# proxy setting. Everything a phase writes has to land on a mounted cache
+# volume, since the agent container's root filesystem is read-only and its
+# home is a 256m tmpfs that dies with the attempt: npm_config_store_dir moves
+# pnpm's content-addressable store off ~/.local/share/pnpm/store,
+# COREPACK_HOME moves corepack's package manager copies off
+# ~/.cache/node/corepack, and UV_PYTHON_INSTALL_DIR moves uv's managed
+# interpreters off ~/.local/share/uv/python. warm-deps seeds
+# /cache/npm/corepack from the image's /opt/corepack the first time a
+# repository's volume is used.
 ENV HOME=/home/agent \
     PATH=/usr/local/go/bin:/home/agent/go/bin:/usr/local/bin:/usr/bin:/bin \
     GOMODCACHE=/cache/go/mod GOCACHE=/cache/go/build GOFLAGS=-mod=mod GOTOOLCHAIN=local \
-    npm_config_cache=/cache/npm npm_config_store_dir=/cache/npm/pnpm-store UV_CACHE_DIR=/cache/uv
+    npm_config_cache=/cache/npm npm_config_store_dir=/cache/npm/pnpm-store \
+    COREPACK_HOME=/cache/npm/corepack UV_PYTHON_INSTALL_DIR=/cache/uv/python \
+    UV_CACHE_DIR=/cache/uv
 WORKDIR /work

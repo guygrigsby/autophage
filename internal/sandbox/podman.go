@@ -39,14 +39,30 @@ func workspaceLabel(repository string) string {
 	return "autophage.workspace=" + volumeSlug(repository)
 }
 
+// cacheVolumes mounts one repository's three caches. The ":z" suffix is
+// load-bearing on an SELinux host: without it every file the prep container
+// writes into a cache carries that container's private MCS category, and the
+// agent container that mounts the same volume a moment later is denied even
+// read access to it. The whole point of the prep phase is that what it
+// fetches is there for the agent phase, so these volumes are shared-label by
+// construction. /work stays ":Z" (private, relabelled per container): only
+// one container is ever on a workspace at a time.
 func cacheVolumes(repository string) []string {
 	slug := volumeSlug(repository)
 	return []string{
-		"-v", "autophage-cache-go-" + slug + ":/cache/go",
-		"-v", "autophage-cache-npm-" + slug + ":/cache/npm",
-		"-v", "autophage-cache-uv-" + slug + ":/cache/uv",
+		"-v", "autophage-cache-go-" + slug + ":/cache/go:z",
+		"-v", "autophage-cache-npm-" + slug + ":/cache/npm:z",
+		"-v", "autophage-cache-uv-" + slug + ":/cache/uv:z",
 	}
 }
+
+// agentHomeMount gives the agent a writable home. A plain --tmpfs mounts as
+// root with mode 0755, which leaves the agent user unable to write to its own
+// $HOME: npm, uv, go and every tool that keeps state there then fails on a
+// read-only root filesystem with nowhere else to go. U=true chowns the mount
+// to the container user, and 0700 keeps it private. The size is in bytes
+// (256m) because the --mount form takes no suffix.
+const agentHomeMount = "type=tmpfs,destination=/home/agent,tmpfs-size=268435456,tmpfs-mode=0700,U=true"
 
 // userns maps the daemon's own host uid onto the image's agent user
 // (uid 1000, gid 1000) rather than onto whatever uid the daemon happens to
@@ -126,7 +142,7 @@ func (m *Manager) Start(ctx context.Context, ws Workspace, attemptID string) (Co
 	args := []string{"run", "-d", "--replace", "--name", name, "--network=none", userns,
 		"--label", workspaceLabel(ws.Repository),
 		"--cap-drop=all", "--security-opt=no-new-privileges", "--read-only",
-		"--tmpfs", "/tmp:rw,size=1g", "--tmpfs", "/home/agent:rw,size=256m",
+		"--tmpfs", "/tmp:rw,size=1g", "--mount", agentHomeMount,
 		"-e", "GOPROXY=off", "-e", "GOFLAGS=-mod=mod",
 		"-v", ws.Path + ":/work:Z"}
 	args = append(args, m.resourceLimitArgs()...)

@@ -39,6 +39,16 @@ func TestContainerLifecycleToolsAndDiff(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Teardown(context.Background(), c) })
 
+	// The label is how a later Prepare finds this container without having
+	// remembered its name, so prove podman really recorded it.
+	labelled, err := exec.Command(m.Podman, "inspect", "--format", `{{index .Config.Labels "autophage.workspace"}}`, c.Name).Output()
+	if err != nil {
+		t.Fatalf("inspect %s: %v", c.Name, err)
+	}
+	if got := strings.TrimSpace(string(labelled)); got != volumeSlug("guy/repo") {
+		t.Errorf("autophage.workspace label = %q, want %q", got, volumeSlug("guy/repo"))
+	}
+
 	tools, closer, err := m.Tools(ctx, c)
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +160,7 @@ func TestStartHardensTheAgentContainer(t *testing.T) {
 	for _, want := range []string{
 		"--network=none", "--userns=keep-id:uid=1000,gid=1000", "--cap-drop=all",
 		"--security-opt=no-new-privileges", "--read-only",
-		"--tmpfs /tmp:rw,size=1g", "--tmpfs /home/agent:rw,size=256m",
+		"--tmpfs /tmp:rw,size=1g", "--mount " + agentHomeMount,
 		"--memory 1g", "--cpus 1", "--pids-limit 256", "--replace",
 		"GOPROXY=off",
 		"--label autophage.workspace=" + volumeSlug("guy/repo"),

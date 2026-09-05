@@ -125,8 +125,29 @@ dev: ## Run autophaged watcher + Vite together (both hot-reload)
 	  $(MAKE) web-dev & \
 	  wait
 
-image: ## Build the sandbox image (podman, context is the parent dir for the jess replace)
-	podman build -t $(IMAGE) -f deploy/Containerfile ..
+# The build context is staged into a temp dir rather than handed the parent
+# directory: `..` ships every sibling project, every build artifact and every
+# .git in them to the build, which is slow and puts files nobody meant to
+# publish inside an image layer. jess is a sibling because the go.mod
+# `replace` points there; drop it here and from the Containerfile once jess is
+# published. A git checkout is staged with `git archive HEAD`, so only
+# committed files reach the image. A copy that is not a checkout (the sync to
+# trig excludes .git) falls back to rsync minus .git and the built binaries.
+image: ## Build the sandbox image from a staged context (this repo + the jess sibling)
+	@set -euo pipefail; \
+	stage() { \
+	  mkdir -p "$$2"; \
+	  if [ "$$(git -C "$$1" rev-parse --show-toplevel 2>/dev/null)" = "$$(cd "$$1" && pwd -P)" ]; then \
+	    git -C "$$1" archive HEAD | tar -x -C "$$2"; \
+	  else \
+	    rsync -a --exclude .git --exclude /$(APP) --exclude /$(APP)d \
+	      --exclude /autophage-toolbox --exclude /web/node_modules "$$1/" "$$2/"; \
+	  fi; \
+	}; \
+	tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
+	stage . "$$tmp/autophage"; \
+	stage ../jess "$$tmp/jess"; \
+	podman build -t $(IMAGE) -f "$$tmp/autophage/deploy/Containerfile" "$$tmp"
 
 image-test: ## Prove the sandbox image
 	deploy/image_test.sh $(IMAGE)
