@@ -368,6 +368,13 @@ func TestPrepareFailsClosedWhenAStaleContainerSurvives(t *testing.T) {
 	if after := git(t, bare, "for-each-ref", "--format=%(refname) %(objectname)"); after != before {
 		t.Errorf("the remote changed despite the failed sweep:\n%s\n%s", before, after)
 	}
+	// The sweep runs under the lock, so failing it must not strand the lock.
+	m.Podman = stubPodman(t)
+	bounded, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if _, err := m.Prepare(bounded, "guy/repo", bare, "autophage/7", "main", "tok"); err != nil {
+		t.Errorf("Prepare after a failed sweep should not be blocked by a leaked lock: %v", err)
+	}
 }
 
 // TestPrepareFailsWhenItCannotListContainers proves a podman that cannot
