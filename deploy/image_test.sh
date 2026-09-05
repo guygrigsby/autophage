@@ -39,14 +39,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# scratch prints "<tmpdir> <volume>" for a fresh, empty workspace and cache
-# pair, both registered for cleanup.
+# scratch sets SCRATCH_TMP and SCRATCH_VOL to a fresh, empty workspace and
+# cache pair, both registered for cleanup. It assigns rather than prints
+# because a command substitution would run it in a subshell, where the
+# cleanup arrays it appends to are the subshell's copies and the volumes it
+# created would outlive the run.
+SCRATCH_TMP=""
+SCRATCH_VOL=""
 scratch() {
-  local name=$1 tmp vol
-  tmp="$(mktemp -d)"; TMPDIRS+=("$tmp")
-  vol="autophage-imgtest-$name-$$"; VOLS+=("$vol")
-  podman volume create "$vol" >/dev/null
-  echo "$tmp $vol"
+  local name=$1
+  SCRATCH_TMP="$(mktemp -d)"; TMPDIRS+=("$SCRATCH_TMP")
+  SCRATCH_VOL="autophage-imgtest-$name-$$"; VOLS+=("$SCRATCH_VOL")
+  podman volume create "$SCRATCH_VOL" >/dev/null
 }
 
 # agent runs a command in the agent shape against one workspace and cache.
@@ -77,8 +81,8 @@ if run sh -c 'curl -sS -m 3 https://proxy.golang.org >/dev/null 2>&1'; then fail
 # Everything a phase writes has to land on a mount: the root filesystem is
 # read-only, so this has to be checked with the volumes attached, the way the
 # daemon runs it.
-read -r WRITE_TMP WRITE_VOL <<<"$(scratch write)"
-agent "$WRITE_TMP" "$WRITE_VOL" sh -c 'test -w /work && test -w /cache/go && test -w /cache/npm && test -w /cache/uv' \
+scratch write
+agent "$SCRATCH_TMP" "$SCRATCH_VOL" sh -c 'test -w /work && test -w /cache/go && test -w /cache/npm && test -w /cache/uv' \
   || fail "/work or /cache not writable by agent"
 
 # warm-deps end to end, per package manager: warm a throwaway copy of each
@@ -89,7 +93,9 @@ agent "$WRITE_TMP" "$WRITE_VOL" sh -c 'test -w /work && test -w /cache/go && tes
 warm_fixture() {
   local name=$1; shift
   local out
-  read -r WARM_TMP WARM_VOL <<<"$(scratch "$name")"
+  scratch "$name"
+  WARM_TMP="$SCRATCH_TMP"
+  WARM_VOL="$SCRATCH_VOL"
   cp -a "$FIXTURES_DIR/$name/." "$WARM_TMP/"
 
   out="$(podman run --rm "${PREP_FLAGS[@]}" -v "$WARM_TMP:/work:Z" -v "$WARM_VOL:/cache:z" "$IMG" warm-deps 2>&1)" || true

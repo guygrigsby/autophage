@@ -21,7 +21,19 @@ func realPodman(t *testing.T) *Manager {
 	if err := exec.Command(bin, "image", "exists", image).Run(); err != nil {
 		t.Skipf("image %s not built; run make image", image)
 	}
-	return &Manager{Podman: bin, Image: image, WorkspacesDir: t.TempDir(), Memory: "1g", CPUs: "1", Pids: 256, BotName: "autophage[bot]", BotEmail: "autophage[bot]@users.noreply.github.com", Logf: t.Logf}
+	m := &Manager{Podman: bin, Image: image, WorkspacesDir: t.TempDir(), Memory: "1g", CPUs: "1", Pids: 256, BotName: "autophage[bot]", BotEmail: "autophage[bot]@users.noreply.github.com", Logf: t.Logf}
+	// The cache volumes outlive the containers by design, so a test run that
+	// did not clean up would leave three more of them on the host every time.
+	t.Cleanup(func() {
+		for _, v := range cacheVolumes("guy/repo") {
+			name, _, ok := strings.Cut(v, ":")
+			if !ok { // the "-v" flag itself, not a mount spec
+				continue
+			}
+			_ = exec.Command(bin, "volume", "rm", "-f", name).Run()
+		}
+	})
+	return m
 }
 
 func TestContainerLifecycleToolsAndDiff(t *testing.T) {
