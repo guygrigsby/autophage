@@ -26,11 +26,14 @@ type skipper interface {
 	Fatalf(format string, args ...any)
 }
 
-// skipOrFatal reports err as a skip when the DSN came from the
-// testcontainers-managed database (any failure there, whatever its message,
-// is environmental: Docker absent, daemon unreachable, image pull failed),
-// or as a fatal failure when the operator supplied AUTOPHAGE_TEST_DSN
-// explicitly (a real, actionable failure).
+// skipOrFatal reports a container-start failure: a skip when the DSN was to
+// be testcontainers-managed (any failure there, whatever its message, is
+// environmental: Docker absent, daemon unreachable, image pull failed), or a
+// fatal failure when the operator supplied AUTOPHAGE_TEST_DSN explicitly (a
+// real, actionable failure; this branch is dead today, since the container
+// is never started when a DSN was supplied, but keeps the helper correct if
+// that ever changes). It is never used for an Open failure: once a database
+// is reachable, Open failing (connect, ping, migrate) is always a real bug.
 func skipOrFatal(t skipper, err error, explicitDSN bool) {
 	t.Helper()
 	if explicitDSN {
@@ -66,9 +69,12 @@ func OpenTest(t *testing.T) *Store {
 	if testErr != nil {
 		skipOrFatal(t, testErr, testExplicit)
 	}
+	// Once the container (or an operator-supplied server) is up, a failure
+	// to connect, ping or migrate is a real bug, not an environmental one:
+	// always fatal, on both the container path and the explicit-DSN path.
 	s, err := Open(t.Context(), testDSN)
 	if err != nil {
-		skipOrFatal(t, err, testExplicit)
+		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

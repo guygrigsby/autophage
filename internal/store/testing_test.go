@@ -32,6 +32,16 @@ func (f *fakeSkipper) Fatalf(format string, args ...any) {
 // the error message and missed testcontainers' bare "failed to create Docker
 // provider" wrapping when Docker is absent entirely, so it fataled instead
 // of skipping). An operator-supplied DSN still fatals: that failure is real.
+//
+// skipOrFatal is scoped to the container-start failure only. Once a
+// database is reachable (container up, or an operator-supplied DSN),
+// OpenTest calls Open directly and fatals unconditionally on any error from
+// it (connect, ping or migrate) via a bare t.Fatalf, on both the container
+// path and the explicit-DSN path: that failure is never environmental, so
+// it never goes through skipOrFatal and is not exercised by this fake-based
+// unit test (asserting it would mean actually failing a *testing.T, which
+// is exactly what a fake avoids; the call site itself is a single
+// unconditional t.Fatalf with no branch to hide a regression in).
 func TestSkipOrFatal(t *testing.T) {
 	t.Run("container-managed DSN skips on any error, never fatals", func(t *testing.T) {
 		for _, err := range []error{
