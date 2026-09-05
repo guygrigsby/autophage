@@ -465,13 +465,16 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	// it finds: an agent that never resolved them has just pushed them. Only
 	// on the path that would open a pull request, and only after
 	// CommitAndPush, which is what removed the container and made the
-	// commits this reads. A check that cannot run is logged and the pull
-	// request is opened anyway: the guard sits on top of the agent's own job
-	// and a human reads the pull request, so a host git that failed here is
-	// not worth spending the attempt's outcome on.
-	if marked, err := r.Sandbox.ConflictMarkers(pushCtx, ws); err != nil {
-		r.logf("runner %s: conflict markers: %v", a.ID, err)
-	} else if marked {
+	// commits this reads. A check that cannot run fails closed, because the
+	// two failures are not the same size: a flaky host git costs the
+	// operator one pull request they open by hand from a branch that is
+	// already pushed, while a pull request carrying conflict markers is sent
+	// to somebody else's repository.
+	marked, err := r.Sandbox.ConflictMarkers(pushCtx, ws)
+	if err != nil {
+		return infra("conflict check", err, summary, report.Usage), nil
+	}
+	if marked {
 		return failed(resolution.FailureAgent, "left unresolved conflict markers on the branch\n\n"+summary, report.Usage), nil
 	}
 

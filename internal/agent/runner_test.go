@@ -975,22 +975,36 @@ func TestRunnerConflictMarkersOpenNoPullRequest(t *testing.T) {
 	}
 }
 
-// A check that cannot run must not cost the attempt its outcome: the guard
-// sits on top of the agent's own job and a human reads the pull request.
-func TestRunnerConflictMarkerCheckFailureStillOpensThePullRequest(t *testing.T) {
+// A check that cannot run fails closed. The two failures are not the same
+// size: a flaky host git costs the operator one pull request they open by
+// hand from the branch, which is already pushed, and a pull request carrying
+// conflict markers is sent to somebody else's repository.
+func TestRunnerConflictMarkerCheckFailureOpensNoPullRequest(t *testing.T) {
 	st := storetest.Open(t)
 	id := startedAttempt(t, st, resolution.Auto)
-	sb := &fakeSandbox{commits: true, conflictErr: errors.New("git: bad object")}
+	sb := &fakeSandbox{commits: true, conflictErr: errors.New("git: bad object 0000")}
 	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
-	r, _, _ := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
+	r, _, logs := newRunner(t, st, sb, gh, scripted(0, goodSummary, nil))
 	r.Run(t.Context(), id)
 	c, err := st.GetCase(t.Context(), "guy/repo", 7)
 	if err != nil {
 		t.Fatal(err)
 	}
 	o := c.Attempts()[0].Outcome
-	if c.State() != resolution.Done || o == nil || o.Kind != resolution.PullRequestOpened {
+	if c.State() != resolution.Failed || o == nil || o.Kind != resolution.FailedOutcome || o.Class != resolution.FailureInfra {
 		t.Fatalf("state %s outcome %+v", c.State(), o)
+	}
+	assertOperatorMessage(t, o.Message, "infrastructure failure at conflict check", id)
+	assertLogged(t, logs, "bad object 0000")
+	if !strings.Contains(o.Message, "What I found") {
+		t.Errorf("the summary was not kept as detail: %q", o.Message)
+	}
+	if len(gh.pullRequests()) != 0 {
+		t.Errorf("a pull request was opened from an unchecked branch: %v", gh.pullRequests())
+	}
+	// The work is on the remote, so the operator can open it by hand.
+	if len(sb.pushed) != 1 {
+		t.Errorf("the work did not reach the branch: %v", sb.pushed)
 	}
 }
 
