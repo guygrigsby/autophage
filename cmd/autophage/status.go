@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func apiClient(cmd *cobra.Command) (*client.Client, error) {
+func apiClient() (*client.Client, error) {
 	tok, err := client.ResolveToken(appID, cliFlags)
 	if err != nil {
 		return nil, err
@@ -26,7 +26,7 @@ func newStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Daemon status: cases by state, running attempts, queue depth",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			c, err := apiClient(cmd)
+			c, err := apiClient()
 			if err != nil {
 				return err
 			}

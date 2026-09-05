@@ -15,7 +15,6 @@ import (
 	"github.com/guygrigsby/jess/ledger"
 	"github.com/guygrigsby/perch/config"
 	"github.com/guygrigsby/perch/daemon"
-	"github.com/jackc/pgx/v5/stdlib"
 
 	rootapp "github.com/guygrigsby/autophage"
 	"github.com/guygrigsby/autophage/internal/api"
@@ -70,7 +69,7 @@ func main() {
 		log.Fatalf("github: %v", err)
 	}
 
-	ledgerDB := stdlib.OpenDBFromPool(st.Pool())
+	ledgerDB := st.SQLDB()
 	pg, err := ledger.NewPostgres(ledgerDB)
 	if err != nil {
 		log.Fatalf("ledger: %v", err)
@@ -88,13 +87,24 @@ func main() {
 	}
 
 	handler := api.New(dir, rootapp.Static(), api.Deps{
-		Store: st, GitHub: gh, Clock: clock, OperatorLogin: cfg.GitHub.OperatorLogin,
+		Base: ctx, Store: st, GitHub: gh, Clock: clock, OperatorLogin: cfg.GitHub.OperatorLogin,
 		Webhook: github.WebhookHandler(st, secrets.WebhookSecret, clock),
 		Sweep:   dispatcher.Sweep, Ledger: pg, Stop: runner.Stop,
 		Version: version, StartedAt: clock.Now(), Concurrency: cfg.Sandbox.Concurrency,
 	})
 	addr := daemon.ResolveAddr(*addrFlag, "AUTOPHAGE_LISTEN", cfg.Listen)
-	srv := &http.Server{Addr: addr, Handler: handler}
+	// Timeouts, because /webhook/github faces the public internet through
+	// Funnel: without them a slow-loris client holds a connection and its
+	// goroutine open for as long as it likes.
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    64 << 10,
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(1)

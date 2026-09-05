@@ -29,7 +29,7 @@ func newCasesCmd() *cobra.Command {
 		Use:   "cases",
 		Short: "List cases, newest first",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cl, err := apiClient(cmd)
+			cl, err := apiClient()
 			if err != nil {
 				return err
 			}
@@ -82,7 +82,7 @@ func newCaseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cl, err := apiClient(cmd)
+			cl, err := apiClient()
 			if err != nil {
 				return err
 			}

@@ -13,7 +13,7 @@ func newWhyCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := args[0]
-			cl, err := apiClient(cmd)
+			cl, err := apiClient()
 			if err != nil {
 				return err
 			}

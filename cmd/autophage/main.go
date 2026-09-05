@@ -1,4 +1,4 @@
-// The rookery CLI client; it talks to a running autophaged.
+// Command autophage is the operator CLI; it talks to a running autophaged.
 package main
 
 import (

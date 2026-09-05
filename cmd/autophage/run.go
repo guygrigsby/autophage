@@ -16,7 +16,7 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cl, err := apiClient(cmd)
+			cl, err := apiClient()
 			if err != nil {
 				return err
 			}
