@@ -182,9 +182,11 @@ func TestPrepareLeavesConflictMarkersOnRebaseConflict(t *testing.T) {
 }
 
 // TestConflictMarkersSeesWhatTheBranchCommitted proves the guard the runner
-// puts in front of OpenPullRequest: a clean branch reports nothing, and a
-// branch whose commits carry the markers the conflicted rebase left reports
-// them, after CommitAndPush and against the base the branch is on.
+// puts in front of OpenPullRequest: a clean branch reports nothing (a
+// markdown heading underline is not a conflict), a branch whose commits carry
+// the markers the conflicted rebase left reports them, and so does a branch
+// where the agent tidied away all but the closing marker. Always after
+// CommitAndPush and against the base the branch is on.
 func TestConflictMarkersSeesWhatTheBranchCommitted(t *testing.T) {
 	m := manager(t)
 	bare := origin(t)
@@ -194,6 +196,11 @@ func TestConflictMarkersSeesWhatTheBranchCommitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(ws.Path, "README.md"), []byte("# ours\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A run of equals signs under a heading is markdown, not a conflict, and
+	// it is the one marker the scan deliberately ignores.
+	if err := os.WriteFile(filepath.Join(ws.Path, "NOTES.md"), []byte("Heading\n=======\n\ntext\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, pushed, err := m.CommitAndPush(ctx, ws, "tok", "ours"); err != nil || !pushed {
@@ -235,6 +242,31 @@ func TestConflictMarkersSeesWhatTheBranchCommitted(t *testing.T) {
 	if !marked {
 		b, _ := os.ReadFile(filepath.Join(ws2.Path, "README.md"))
 		t.Errorf("committed conflict markers went unreported:\n%s", b)
+	}
+	if err := m.Teardown(ctx, Container{Workspace: ws2}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A half-resolved conflict on a fresh branch: the agent deleted the
+	// opening marker and the divider and left the closing one behind. Either
+	// arrow alone is a conflict committed.
+	ws3, err := m.Prepare(ctx, "guy/repo", bare, "autophage/8", "main", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	half := "ours\ntheirs\n" + strings.Repeat(">", 7) + " 0123456789abcdef\n"
+	if err := os.WriteFile(filepath.Join(ws3.Path, "README.md"), []byte(half), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, pushed, err := m.CommitAndPush(ctx, ws3, "tok", "autophage: half resolved"); err != nil || !pushed {
+		t.Fatalf("push the half resolved tree: %v %v", pushed, err)
+	}
+	marked, err = m.ConflictMarkers(ctx, ws3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !marked {
+		t.Errorf("a surviving closing marker went unreported:\n%s", half)
 	}
 }
 

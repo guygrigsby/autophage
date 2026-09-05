@@ -358,21 +358,25 @@ func (m *Manager) CommitAndPush(ctx context.Context, ws Workspace, token, messag
 	return head, true, nil
 }
 
-// conflictOpen and conflictClose are the two markers a merge writes around a
-// hunk it could not resolve. A run of equals signs is the third marker git
-// writes, but it is also how markdown underlines a heading, so it is not on
-// its own evidence of anything: a branch counts as conflicted only when the
-// commits added both an opening and a closing marker.
-const (
-	conflictOpen  = "<<<<<<< "
-	conflictClose = ">>>>>>> "
-)
+// conflictMarkerPattern matches the line a merge writes to open or close a
+// hunk it could not resolve. Either arrow marker alone counts: an agent that
+// deleted the opening marker and the divider but left ">>>>>>> <sha>" behind
+// has still committed a conflict. The divider itself (a run of equals signs)
+// is not in the pattern, because that is also how markdown underlines a
+// heading. POSIX extended, which is what git's -G takes.
+const conflictMarkerPattern = `^(<{7} |>{7} )`
 
 // ConflictMarkers reports whether the commits this branch adds on top of its
 // base left merge conflict markers in the tree. checkout leaves them there
 // deliberately when the rebase onto the default branch conflicts, so
 // resolving them is the agent's first job; an agent that instead committed
 // them would otherwise reach a pull request.
+//
+// git does the scanning: -G matches the patch text and --name-only bounds
+// what comes back to a list of file names, so a branch that committed a
+// hundred megabytes does not arrive in the daemon's memory to be searched
+// here. Added and modified files only, so a marker that was already on the
+// default branch is not read as this attempt's doing.
 //
 // Valid only after CommitAndPush, which is what removes the agent's
 // container and commits the working tree: called any earlier this either
@@ -385,31 +389,11 @@ func (m *Manager) ConflictMarkers(ctx context.Context, ws Workspace) (bool, erro
 	if err != nil {
 		return false, fmt.Errorf("conflict markers for %s: %w", ws.Repository, err)
 	}
-	// Added and modified files only, with no context lines: every line the
-	// scan sees is one the branch itself wrote, so a marker that was already
-	// on the default branch is not this attempt's doing.
-	diff, err := m.gitOut(ctx, ws.Path, "diff", base+"..HEAD", "--diff-filter=AM", "--unified=0")
+	files, err := m.gitOut(ctx, ws.Path, "diff", base+"..HEAD", "--diff-filter=AM", "--name-only", "-G"+conflictMarkerPattern)
 	if err != nil {
 		return false, fmt.Errorf("conflict markers for %s: %w", ws.Repository, err)
 	}
-	var opened, closed bool
-	for _, line := range strings.Split(diff, "\n") {
-		// Added lines only. "+++" is the file header, not content.
-		if !strings.HasPrefix(line, "+") || strings.HasPrefix(line, "+++") {
-			continue
-		}
-		added := line[1:]
-		if strings.HasPrefix(added, conflictOpen) {
-			opened = true
-		}
-		if strings.HasPrefix(added, conflictClose) {
-			closed = true
-		}
-		if opened && closed {
-			return true, nil
-		}
-	}
-	return false, nil
+	return files != "", nil
 }
 
 func (m *Manager) logf(format string, args ...any) {
