@@ -308,34 +308,43 @@ func (c *Case) RecordOutcome(attemptID string, o Outcome) error {
 	if err != nil {
 		return err
 	}
+	// Decide the whole transition before touching anything. An outcome the
+	// case will not take (Aborted{IssueClosed} outside Closed) has to leave
+	// the aggregate exactly as it found it, or a refusal still ships an
+	// outcome to the store on the next persist.
+	moves := c.state != Closed
+	var to CaseState
+	var cause TransitionCause
+	if moves {
+		switch o.Kind {
+		case PullRequestOpened:
+			to, cause = Done, o.cause(false)
+		case BudgetExhausted:
+			to, cause = AwaitingApproval, o.cause(false)
+		case FailedOutcome:
+			to, cause = Failed, o.cause(false)
+		case Aborted:
+			switch o.Reason {
+			case AbortOperatorStop:
+				to, cause = AwaitingApproval, o.cause(false)
+			case AbortDaemonRestart:
+				if c.restartedBefore(a.Ordinal) {
+					to, cause = Failed, o.cause(false)
+				} else {
+					to, cause = Queued, o.cause(true)
+				}
+			default:
+				return Refused("abort reason %s outside Closed", o.Reason)
+			}
+		}
+	}
 	a.Outcome = &o
 	if c.changes.Outcomes == nil {
 		c.changes.Outcomes = map[int]Outcome{}
 	}
 	c.changes.Outcomes[a.Ordinal] = o
-	if c.state == Closed {
-		return nil
-	}
-	switch o.Kind {
-	case PullRequestOpened:
-		c.move(Done, o.cause(false), o.EndedAt)
-	case BudgetExhausted:
-		c.move(AwaitingApproval, o.cause(false), o.EndedAt)
-	case FailedOutcome:
-		c.move(Failed, o.cause(false), o.EndedAt)
-	case Aborted:
-		switch o.Reason {
-		case AbortOperatorStop:
-			c.move(AwaitingApproval, o.cause(false), o.EndedAt)
-		case AbortDaemonRestart:
-			if c.restartedBefore(a.Ordinal) {
-				c.move(Failed, o.cause(false), o.EndedAt)
-			} else {
-				c.move(Queued, o.cause(true), o.EndedAt)
-			}
-		default:
-			return Refused("abort reason %s outside Closed", o.Reason)
-		}
+	if moves {
+		c.move(to, cause, o.EndedAt)
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package resolution
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -84,6 +85,12 @@ func driveTo(t *testing.T, state CaseState) *Case {
 		o, _ := OutcomePullRequest(12, "0123456789abcdef0123456789abcdef01234567", "fixed", Usage{Turns: 3}, t0)
 		step(c.RecordOutcome("", o))
 	case Closed:
+		// Closed carries an open attempt, the only shape in which an
+		// outcome is recordable there: the issue was closed while an
+		// attempt was running and the runner has yet to end it.
+		step(c.RecordTriage(Triage{Size: Small, Rationale: "typo", Model: "m", TriagedAt: t0}))
+		_, err = c.StartAttempt(Auto, budget(t), "brief", t0)
+		step(err)
 		step(c.Close(Closure{DeliveryID: "d-9", ClosedAt: t0}))
 	}
 	if c.State() != state {
@@ -123,12 +130,15 @@ func TestTransitionTable(t *testing.T) {
 		"triage_large":      {{Received, AwaitingApproval}},
 		"approval":          {{Gated, Queued}, {AwaitingApproval, Queued}, {Failed, Queued}, {Received, Received}, {Queued, Queued}, {Attempting, Attempting}},
 		"start_attempt":     {{Queued, Attempting}},
-		"outcome_pr":        {{Attempting, Done}},
-		"outcome_exhausted": {{Attempting, AwaitingApproval}},
-		"outcome_failed":    {{Attempting, Failed}},
-		"outcome_op_stop":   {{Attempting, AwaitingApproval}},
-		"outcome_restart":   {{Attempting, Queued}},
-		"close":             {{Received, Closed}, {Gated, Closed}, {Queued, Closed}, {AwaitingApproval, Closed}, {Failed, Closed}, {Attempting, Closed}},
+		"outcome_pr":        {{Attempting, Done}, {Closed, Closed}},
+		"outcome_exhausted": {{Attempting, AwaitingApproval}, {Closed, Closed}},
+		"outcome_failed":    {{Attempting, Failed}, {Closed, Closed}},
+		"outcome_op_stop":   {{Attempting, AwaitingApproval}, {Closed, Closed}},
+		"outcome_restart":   {{Attempting, Queued}, {Closed, Closed}},
+		// The one outcome Closed alone admits: an abort for the closure
+		// itself is meaningless while the case is still open.
+		"outcome_issue_closed": {{Closed, Closed}},
+		"close":                {{Received, Closed}, {Gated, Closed}, {Queued, Closed}, {AwaitingApproval, Closed}, {Failed, Closed}, {Attempting, Closed}},
 	}
 	apply := func(c *Case, cmd string) error {
 		switch cmd {
@@ -156,6 +166,9 @@ func TestTransitionTable(t *testing.T) {
 		case "outcome_restart":
 			o, _ := OutcomeAborted(AbortDaemonRestart, "s", Usage{}, t0)
 			return c.RecordOutcome("", o)
+		case "outcome_issue_closed":
+			o, _ := OutcomeAborted(AbortIssueClosed, "s", Usage{}, t0)
+			return c.RecordOutcome("", o)
 		case "close":
 			return c.Close(Closure{DeliveryID: "d", ClosedAt: t0})
 		}
@@ -169,6 +182,9 @@ func TestTransitionTable(t *testing.T) {
 		}
 		for _, from := range AllCaseStates() {
 			c := driveTo(t, from)
+			// A refusal must leave the aggregate exactly as it was: same
+			// state, same open attempt, nothing queued for the store.
+			wasState, wasOpen, wasChanges := c.State(), c.OpenAttempt(), c.Changes()
 			err := apply(c, cmd)
 			to, ok := listed[from]
 			switch {
@@ -180,6 +196,16 @@ func TestTransitionTable(t *testing.T) {
 				t.Errorf("%s from %s: accepted, want refusal", cmd, from)
 			case !ok && !errors.Is(err, ErrRefused):
 				t.Errorf("%s from %s: wrong error %v", cmd, from, err)
+			case !ok:
+				if c.State() != wasState {
+					t.Errorf("%s from %s: refusal moved the state to %s", cmd, from, c.State())
+				}
+				if !reflect.DeepEqual(c.OpenAttempt(), wasOpen) {
+					t.Errorf("%s from %s: refusal changed the open attempt to %+v", cmd, from, c.OpenAttempt())
+				}
+				if !reflect.DeepEqual(c.Changes(), wasChanges) {
+					t.Errorf("%s from %s: refusal recorded changes %+v", cmd, from, c.Changes())
+				}
 			}
 			if ok && from != to {
 				tr := c.Changes().Transitions
