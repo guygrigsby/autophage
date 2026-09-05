@@ -17,7 +17,7 @@ var cliFlags *client.Flags
 func newRootCmd() *cobra.Command {
 	root, f := client.Root(appID, "autophage CLI", "Talks to a running daemon.", "http://127.0.0.1:8080")
 	cliFlags = f
-	root.AddCommand(newAuthCmd(), newWhoamiCmd())
+	root.AddCommand(newAuthCmd(), newWhoamiCmd(), newStatusCmd(), newCasesCmd(), newCaseCmd(), newRunCmd(), newStopCmd(), newWhyCmd())
 	return root
 }
 

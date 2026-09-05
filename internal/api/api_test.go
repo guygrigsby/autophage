@@ -10,7 +10,7 @@ import (
 )
 
 func TestHealthz(t *testing.T) {
-	h := New(t.TempDir(), nil)
+	h := New(t.TempDir(), nil, Deps{})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK {
@@ -19,7 +19,7 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestMintLoopbackOnly(t *testing.T) {
-	h := New(t.TempDir(), nil)
+	h := New(t.TempDir(), nil, Deps{})
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/mint", nil)
@@ -47,7 +47,7 @@ func TestMintLoopbackOnly(t *testing.T) {
 
 func TestWhoamiRequiresToken(t *testing.T) {
 	dir := t.TempDir()
-	h := New(dir, nil)
+	h := New(dir, nil, Deps{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/whoami", nil))

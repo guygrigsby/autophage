@@ -1,2 +1,41 @@
-# Copy to ~/.config/autophage/config.toml. All keys are optional; defaults shown.
-listen = ":8080"
+# Copy to ~/.config/autophage/config.toml. Secrets are never set here: the
+# webhook secret and the OpenRouter key come from the environment
+# (AUTOPHAGE_GITHUB_WEBHOOK_SECRET, OPENROUTER_API_KEY). Values below are the
+# built-in defaults except where noted.
+listen = "127.0.0.1:8080"
+
+[db]
+url = "postgres:///autophage"
+
+[github]
+app_id          = 0                                # the GitHub App's numeric id
+private_key     = "~/.config/autophage/app.pem"     # path to the App's private key PEM
+bot_login       = "autophage[bot]"
+operator_login  = "guy"                             # GitHub login used for operator-run approvals
+
+[model.triage]
+model = "moonshotai/kimi-k2.7-code"                 # OpenRouter model id
+
+[model.auto]
+model = "moonshotai/kimi-k3"
+
+[model.approved]
+model = "moonshotai/kimi-k3"
+
+[budget.auto]
+turns      = 40
+wall_clock = "45m"
+diff_lines = 600
+
+[budget.approved]
+turns      = 150
+wall_clock = "3h"
+diff_lines = 3000
+
+[sandbox]
+image          = "localhost/autophage-sandbox:latest"
+workspaces_dir = "~/.local/share/autophage/workspaces"
+concurrency    = 2
+
+[label]
+approved = "approved"

@@ -1,6 +1,7 @@
 .PHONY: help web-dev server-dev web-build server-build cli-build build \
         server-test web-test test check clean \
-        install install-launchd uninstall-launchd redeploy service-restart dev
+        install install-launchd uninstall-launchd redeploy redeploy-launchd redeploy-systemd \
+        install-systemd service-restart dev
 
 SHELL := /bin/bash
 
@@ -9,6 +10,7 @@ WEB_DIR     := web
 INSTALL_DIR ?= $(HOME)/.local/bin
 LAUNCHD_LABEL := dev.grigsby.$(APP)d
 LAUNCHD_PLIST := $(HOME)/Library/LaunchAgents/$(LAUNCHD_LABEL).plist
+SYSTEMD_UNIT  := $(HOME)/.config/systemd/user/$(APP)d.service
 
 # HAS_WEB is non-empty when this app embeds a web SPA. `init.sh --no-web` removes
 # web/, so the build/check/test targets gate their web steps on this to work in
@@ -36,7 +38,7 @@ web-build: $(WEB_DIR)/node_modules ## Build the SPA into web/dist
 	@touch $(WEB_DIR)/dist/.gitkeep
 
 server-build: ## Build the autophaged daemon (embeds web/dist)
-	go build -o $(APP)d ./cmd/autophaged
+	go build -ldflags "-X main.version=$$(git describe --tags --always --dirty)" -o $(APP)d ./cmd/autophaged
 
 cli-build: ## Build the app CLI
 	go build -o $(APP) ./cmd/autophage
@@ -88,7 +90,19 @@ service-restart: ## Rebuild, reinstall, kickstart autophaged in place
 		launchctl kickstart -k gui/$$(id -u)/$(LAUNCHD_LABEL) && echo "✓ kickstarted $(LAUNCHD_LABEL)"; \
 	else echo "$(LAUNCHD_LABEL) not loaded; run 'make install-launchd' first"; exit 1; fi
 
-redeploy: ## Stop autophaged, install fresh binary, start it back up (clean swap)
+install-systemd: install ## Install + enable the autophaged user service (Linux)
+	@mkdir -p $(dir $(SYSTEMD_UNIT))
+	@sed -e "s|{{INSTALL_DIR}}|$(INSTALL_DIR)|g" deploy/autophaged.service.template > $(SYSTEMD_UNIT)
+	systemctl --user daemon-reload
+	systemctl --user enable --now $(APP)d.service
+	@echo "✓ enabled $(APP)d (systemctl --user status $(APP)d)"
+
+redeploy-systemd: ## Rebuild, reinstall and restart the user service (Linux)
+	@$(MAKE) install
+	systemctl --user restart $(APP)d.service
+	@echo "✓ restarted $(APP)d"
+
+redeploy-launchd: ## Stop autophaged, install fresh binary, start it back up (macOS clean swap)
 	@if [ ! -f $(LAUNCHD_PLIST) ]; then echo "run 'make install-launchd' first"; exit 1; fi
 	@launchctl bootout gui/$$(id -u)/$(LAUNCHD_LABEL) 2>/dev/null || true
 	@$(MAKE) install
@@ -96,6 +110,9 @@ redeploy: ## Stop autophaged, install fresh binary, start it back up (clean swap
 		i=$$((i+1)); if [ $$i -ge 50 ]; then echo "timed out"; exit 1; fi; sleep 0.1; done
 	@launchctl bootstrap gui/$$(id -u) $(LAUNCHD_PLIST)
 	@echo "✓ redeployed $(LAUNCHD_LABEL)"
+
+redeploy: ## Stop, reinstall, start (launchd on macOS, systemd on Linux)
+	@if [ "$$(uname)" = Linux ]; then $(MAKE) redeploy-systemd; else $(MAKE) redeploy-launchd; fi
 
 dev: ## Run autophaged watcher + Vite together (both hot-reload)
 	@trap 'kill 0' EXIT INT TERM; \

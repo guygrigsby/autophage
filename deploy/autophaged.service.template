@@ -1,0 +1,17 @@
+[Unit]
+Description=autophage daemon
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart={{INSTALL_DIR}}/autophaged
+Restart=always
+RestartSec=5s
+EnvironmentFile=%h/.config/autophage/env
+WorkingDirectory=%h
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
