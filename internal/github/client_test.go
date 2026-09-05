@@ -28,23 +28,32 @@ func testKey(t *testing.T) []byte {
 // fakeGitHub answers the handful of endpoints the client uses and records
 // what it saw.
 type fakeGitHub struct {
-	mux          *http.ServeMux
-	tokenReqs    []map[string]any
-	comments     []map[string]any
-	pulls        []map[string]any
-	labels       []map[string]any
-	labelMissing bool
-	retryOnce    atomic.Bool
+	mux           *http.ServeMux
+	tokenReqs     []map[string]any
+	comments      []map[string]any
+	pulls         []map[string]any
+	labels        []map[string]any
+	labelMissing  bool
+	retryOnce     atomic.Bool
+	mintRetryOnce atomic.Bool
 }
 
 func newFakeGitHub(t *testing.T) (*fakeGitHub, *httptest.Server) {
 	f := &fakeGitHub{mux: http.NewServeMux(), labelMissing: true}
 	f.mux.HandleFunc("POST /app/installations/42/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("User-Agent") != "autophage-test" {
+			t.Errorf("token mint user agent = %q", r.Header.Get("User-Agent"))
+		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.tokenReqs = append(f.tokenReqs, body)
 		if r.Header.Get("Authorization") == "" {
 			http.Error(w, "no jwt", http.StatusUnauthorized)
+			return
+		}
+		if f.mintRetryOnce.CompareAndSwap(true, false) {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, `{"message":"slow down"}`, http.StatusTooManyRequests)
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
@@ -125,6 +134,20 @@ func TestMintTokenScopedToRepository(t *testing.T) {
 	}
 	if branch, err := c.DefaultBranch(t.Context(), repo); err != nil || branch != "trunk" {
 		t.Errorf("default branch = %q %v", branch, err)
+	}
+}
+
+func TestMintTokenRetriesOnRateLimit(t *testing.T) {
+	f, srv := newFakeGitHub(t)
+	f.mintRetryOnce.Store(true)
+	c := newTestClient(t, srv)
+	repo, _ := resolution.NewRepository("guy/repo", 42, "main", time.Now())
+	tok, err := c.MintToken(t.Context(), repo)
+	if err != nil || tok.Value != "ghs_test" {
+		t.Fatalf("token = %+v %v", tok, err)
+	}
+	if len(f.tokenReqs) != 2 {
+		t.Fatalf("token requests = %d, want 2", len(f.tokenReqs))
 	}
 }
 

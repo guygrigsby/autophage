@@ -45,7 +45,16 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	if cfg.UserAgent == "" {
 		cfg.UserAgent = "autophage"
 	}
-	apps, err := ghinstallation.NewAppsTransport(http.DefaultTransport, cfg.AppID, cfg.PrivateKeyPEM)
+	// base carries the User-Agent and the retry policy for every request
+	// ghinstallation sends on the wire: the token mint (both MintToken's
+	// direct call and any lazy refresh inside a repo call, since
+	// NewFromAppsTransport reuses this same base as the installation
+	// transport's underlying sender) and the repo API call itself.
+	// ghinstallation turns a non-2xx token response into a Go error only
+	// after the transport returns it, so the retry must happen in here,
+	// before that conversion.
+	base := &retryTransport{next: http.DefaultTransport, userAgent: cfg.UserAgent}
+	apps, err := ghinstallation.NewAppsTransport(base, cfg.AppID, cfg.PrivateKeyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("github: app transport: %w", err)
 	}
@@ -80,6 +89,13 @@ func (c *Client) transport(id int64, repoName string) *ghinstallation.Transport 
 // through functional options; WithURLs only validates the URL shape (unlike
 // WithEnterpriseURLs it does not append an api/v3 prefix), which is what the
 // httptest fake needs.
+//
+// The installation transport's underlying sender is the same retrying,
+// User-Agent-setting base built in NewClient (ghinstallation.
+// NewFromAppsTransport reuses it), so the actual repo API call already gets
+// the retry policy without wrapping it again here; wrapping it a second
+// time would let a sustained rate limit retry the same call from two nested
+// layers at once.
 func (c *Client) api(ctx context.Context, repository string) (*gh.Client, error) {
 	id, err := c.cfg.Installations(ctx, repository)
 	if err != nil {
@@ -87,7 +103,7 @@ func (c *Client) api(ctx context.Context, repository string) (*gh.Client, error)
 	}
 	_, name := splitRepo(repository)
 	opts := []gh.ClientOptionsFunc{
-		gh.WithTransport(&retryTransport{next: c.transport(id, name)}),
+		gh.WithTransport(c.transport(id, name)),
 		gh.WithUserAgent(c.cfg.UserAgent),
 	}
 	if c.cfg.BaseURL != "" {
@@ -207,11 +223,24 @@ func (c *Client) EnsureLabel(ctx context.Context, repository, label string) erro
 // cannot ping people.
 func neutraliseMentions(s string) string { return strings.ReplaceAll(s, "@", "@\u200b") }
 
-// retryTransport honors Retry-After on 403 and 429 up to twice, sleeping at
-// most 60s each time, then hands the response back.
-type retryTransport struct{ next http.RoundTripper }
+// retryTransport sets a default User-Agent and honors Retry-After on 403
+// and 429 up to twice, sleeping at most 60s each time, then hands the
+// response back. One instance serves both the App's own requests (the
+// token mint, which never gets a User-Agent or retry from go-github since
+// it never sees that request) and, transitively through ghinstallation,
+// the repo API calls, so the policy lives in exactly one place.
+type retryTransport struct {
+	next      http.RoundTripper
+	userAgent string
+}
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.userAgent != "" && req.Header.Get("User-Agent") == "" {
+		// Clone rather than mutate req in place: RoundTrip must not modify
+		// the request it is given, only consume and close its body.
+		req = cloneRequest(req)
+		req.Header.Set("User-Agent", t.userAgent)
+	}
 	for attempt := range 3 {
 		// The first attempt drains req.Body over the wire; a retry must
 		// rewind it from GetBody (net/http populates this for buffer- and
@@ -243,6 +272,15 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 	return nil, errors.New("unreachable")
+}
+
+// cloneRequest shallow-copies a request and deep-copies its header, so a
+// transport can set a header without mutating the caller's request.
+func cloneRequest(r *http.Request) *http.Request {
+	r2 := new(http.Request)
+	*r2 = *r
+	r2.Header = r.Header.Clone()
+	return r2
 }
 
 // retryAfter parses the seconds or HTTP-date forms, capped at 60s.
