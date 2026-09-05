@@ -195,7 +195,10 @@ func (c *Client) OpenPullRequest(ctx context.Context, repository, head, base, ti
 		return 0, err
 	}
 	owner, name := splitRepo(repository)
-	pr, _, err := api.PullRequests.Create(ctx, owner, name, &gh.NewPullRequest{Title: gh.Ptr(title), Head: gh.Ptr(head), Base: gh.Ptr(base), Body: gh.Ptr(neutraliseMentions(body))})
+	// The title as well as the body: it is built from the issue's own title,
+	// which is whatever the requester typed, and a pull request title pings
+	// exactly like a body does.
+	pr, _, err := api.PullRequests.Create(ctx, owner, name, &gh.NewPullRequest{Title: gh.Ptr(neutraliseMentions(title)), Head: gh.Ptr(head), Base: gh.Ptr(base), Body: gh.Ptr(neutraliseMentions(body))})
 	if err != nil {
 		return 0, fmt.Errorf("github: open pull request on %s: %w", repository, err)
 	}

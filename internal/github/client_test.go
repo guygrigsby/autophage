@@ -238,12 +238,16 @@ func TestGetIssueCommentPullLabel(t *testing.T) {
 	if body := f.comments[0]["body"]; body != "hello @\u200beveryone" {
 		t.Errorf("mentions not neutralised: %q", body)
 	}
-	pr, err := c.OpenPullRequest(ctx, "guy/repo", "autophage/7", "main", "Fix typo", "Fixes #7")
+	pr, err := c.OpenPullRequest(ctx, "guy/repo", "autophage/7", "main", "autophage: fix @everyone", "Fixes #7 for @guy")
 	if err != nil || pr != 12 {
 		t.Fatalf("pr = %d %v", pr, err)
 	}
 	if f.pulls[0]["head"] != "autophage/7" || f.pulls[0]["base"] != "main" {
 		t.Errorf("pull = %v", f.pulls[0])
+	}
+	// The title comes from the issue title, which the requester wrote.
+	if f.pulls[0]["title"] != "autophage: fix @\u200beveryone" || f.pulls[0]["body"] != "Fixes #7 for @\u200bguy" {
+		t.Errorf("mentions not neutralised on the pull request: %v", f.pulls[0])
 	}
 	if err := c.EnsureLabel(ctx, "guy/repo", "approved"); err != nil {
 		t.Fatal(err)
