@@ -873,7 +873,7 @@ Pipeline in `Run`, each step's failure mapped to an outcome (never a panic, neve
 7. `Sandbox.Tools`; failure `Failed{Infra}`. Defer closer.
 8. Build the model via `Models.Tier(AttemptModel)`.
 9. `RunAttempt` with `OnRunBegan` recording `Case.RecordRun(attemptID, Run{RunID, Model, BaseSha, BeganAt})` through the store (a failure to record is logged; the run continues), `DiffLines` bound to the container and base sha.
-10. `Sandbox.CommitAndPush(ws, token, "autophage: attempt <ordinal>")` always, even after a stop or model error; failure is `Failed{Infra}` unless a better outcome already exists.
+10. `Sandbox.CommitAndPush(ws, token, "autophage: attempt <ordinal>")` always, even after a stop or model error; failure is `Failed{Infra}` whatever the run's stop reason, with the summary kept as detail: a branch that never reached GitHub has not saved the work.
 11. Outcome by report: `StopModelErr` to `Failed{Model, err}`; `StopCancelled` to `Aborted{reason from the running slot, default OperatorStop}`; `StopTurns`, `StopWallClock`, `StopDiffLines` to `BudgetExhausted{limit}`; `StopNone` with `headSha == baseSha` (no commits) to `Failed{Agent, summary}`; `StopNone` with commits: `GitHub.OpenPullRequest(repo, branch, defaultBranch, "autophage: "+issue title (fetched via GetIssue) truncated to 70 chars, summary + "\n\nFixes #<n>")`, then `PullRequestOpened{pr, headSha}`; a PR failure is `Failed{Infra}` with the branch pushed.
 12. `Case.RecordOutcome` through the store; `Metrics.Ended`.
 13. Unregister.
