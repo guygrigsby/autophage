@@ -442,7 +442,10 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 		if report.Err != nil {
 			r.logf("runner %s: model run: %v", a.ID, report.Err)
 		}
-		message := fmt.Sprintf("model failure; see `autophage why %s` on the daemon host\n\n%s", a.ID, summary)
+		message := fmt.Sprintf("model failure; see `autophage why %s` on the daemon host", a.ID)
+		if summary != "" {
+			message += "\n\n" + summary
+		}
 		return failed(resolution.FailureModel, message, report.Usage), nil
 	case StopCancelled:
 		o, cerr := resolution.OutcomeAborted(r.reason(slot, resolution.AbortOperatorStop), summary, report.Usage, r.now())
