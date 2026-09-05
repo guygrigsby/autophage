@@ -45,6 +45,31 @@ func TestMintLoopbackOnly(t *testing.T) {
 	}
 }
 
+// TestMintRefusesProxiedRequests proves the loopback check is not the whole
+// story. Put any reverse proxy in front of the daemon (tailscale serve,
+// nginx) and every request arrives from 127.0.0.1, so a Funnel path that
+// reached /api would mint an operator token for the public internet. The
+// headers such a proxy adds are the evidence that the request is not from
+// the machine itself.
+func TestMintRefusesProxiedRequests(t *testing.T) {
+	for _, header := range []string{"Tailscale-Funnel-Request", "Tailscale-User-Login", "X-Forwarded-For"} {
+		h := New(t.TempDir(), nil, Deps{})
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/mint", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set(header, "1")
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s: code = %d, want 403", header, rec.Code)
+		}
+		var got map[string]string
+		_ = json.Unmarshal(rec.Body.Bytes(), &got)
+		if got["error"] != "forbidden" {
+			t.Errorf("%s: error = %q, want forbidden", header, got["error"])
+		}
+	}
+}
+
 func TestWhoamiRequiresToken(t *testing.T) {
 	dir := t.TempDir()
 	h := New(dir, nil, Deps{})

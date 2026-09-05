@@ -179,6 +179,36 @@ func TestStatusCasesRunAndStop(t *testing.T) {
 	}
 }
 
+// TestListCasesSeparatesTheCallersFaultFromTheStores proves only a
+// malformed cursor reads as invalid_request. Reporting a store failure as
+// the caller's fault tells them to fix a request that was fine, and the
+// detail it carried was the raw store error: query text and column names
+// the operator cannot act on.
+func TestListCasesSeparatesTheCallersFaultFromTheStores(t *testing.T) {
+	st := storetest.Open(t)
+	srv, tok := newServer(t, st, &fakeGitHub{issues: map[string]resolution.IssueDetail{}})
+
+	code, body := do(t, srv, tok, http.MethodGet, "/api/cases?cursor=not-a-cursor")
+	if code != http.StatusBadRequest || body["error"] != "invalid_request" {
+		t.Errorf("bad cursor = %d %v", code, body)
+	}
+	// The detail names the field, not the store's internals.
+	if detail, _ := body["detail"].(string); !strings.Contains(detail, "cursor") || strings.Contains(detail, "select") {
+		t.Errorf("detail = %q", detail)
+	}
+
+	// With the store closed underneath it, the same request is a 500 that
+	// says nothing else.
+	st.Close()
+	code, body = do(t, srv, tok, http.MethodGet, "/api/cases")
+	if code != http.StatusInternalServerError || body["error"] != "internal" {
+		t.Fatalf("store failure = %d %v", code, body)
+	}
+	if _, ok := body["detail"]; ok {
+		t.Errorf("store error leaked to the caller: %v", body)
+	}
+}
+
 // TestRunMapsIssueNotFoundToNotFound proves an issue absent on GitHub
 // (GetIssue's ErrIssueNotFound) maps to not_found, not upstream_unavailable:
 // only a genuine upstream failure (network, auth, rate limit) should read as

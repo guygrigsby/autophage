@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -70,7 +69,14 @@ func (h *handlers) listCases(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, next, err := h.d.Store.ListCases(r.Context(), f)
 	if err != nil {
-		writeErr(w, fmt.Errorf("%w: %v", errInvalidRequest, err))
+		// Only the cursor is the caller's fault. Anything else is the
+		// store failing, which is a 500 the caller cannot act on and whose
+		// text (query shapes, column names) is not theirs to read.
+		if errors.Is(err, store.ErrBadCursor) {
+			writeErr(w, fmt.Errorf("%w: cursor", errInvalidRequest))
+			return
+		}
+		writeErr(w, err)
 		return
 	}
 	out := make([]map[string]any, 0, len(rows))
@@ -166,7 +172,10 @@ func (h *handlers) run(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.d.Sweep != nil {
-		go h.d.Sweep(contextWithoutCancel(ctx))
+		// The sweep outlives this request but not the daemon, so it takes
+		// the daemon's context rather than a detached one that would keep
+		// running through shutdown.
+		go h.d.Sweep(h.d.Base)
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"repository": repo, "number": n, "state": c.State()})
 }
@@ -223,5 +232,3 @@ func attemptJSON(a resolution.Attempt) map[string]any {
 	}
 	return out
 }
-
-func contextWithoutCancel(ctx context.Context) context.Context { return context.WithoutCancel(ctx) }
