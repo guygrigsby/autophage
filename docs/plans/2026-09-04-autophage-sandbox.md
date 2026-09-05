@@ -125,9 +125,27 @@ func TestToolboxWriteReadBashRoundTrip(t *testing.T) {
 
 func TestToolboxErrorsReachTheModelAsResults(t *testing.T) {
 	tools := dial(t, t.TempDir())
-	_, err := tools["read"].Execute(t.Context(), json.RawMessage(`{"path":"missing.txt"}`))
-	if err == nil || !strings.Contains(err.Error(), "missing.txt") {
-		t.Errorf("missing file should surface as a tool error naming the file, got %v", err)
+	out, err := tools["read"].Execute(t.Context(), json.RawMessage(`{"path":"missing.txt"}`))
+	if err != nil {
+		t.Fatalf("a tool error must be a result the model reads, not a Go error (which trips agentcore's failure breaker): %v", err)
+	}
+	if !strings.Contains(string(out), "missing.txt") {
+		t.Errorf("result should name the missing file, got %s", out)
+	}
+}
+
+func TestToolboxMarksReadOnlyTools(t *testing.T) {
+	tools := dial(t, t.TempDir())
+	type readOnlyer interface{ ReadOnly(json.RawMessage) bool }
+	for name, want := range map[string]bool{"read": true, "grep": true, "glob": true, "ls": true, "bash": false, "write": false, "edit": false} {
+		ro, ok := tools[name].(readOnlyer)
+		if !ok {
+			t.Errorf("%s: adapted tool does not expose ReadOnly", name)
+			continue
+		}
+		if got := ro.ReadOnly(nil); got != want {
+			t.Errorf("%s: ReadOnly = %v, want %v", name, got, want)
+		}
 	}
 }
 
@@ -140,7 +158,7 @@ func keys(m map[string]ac.Tool) []string {
 }
 ```
 
-`jess/mcp` turns an `IsError` result into a Go error from `Execute`; agentcore then feeds that error text back to the model as the tool result, which is the behavior the third test pins.
+`jess/mcp` returns an `IsError` result's text as a successful result (agentcore would otherwise count it toward its consecutive-failure breaker and disable the tool), and carries the server's `readOnlyHint` through as `ReadOnly` so agentcore runs read-only tools concurrently. The third and fourth tests pin both.
 
 - [ ] **Step 2: Wire the dependencies and run the test to verify it fails**
 
@@ -198,7 +216,11 @@ func New(opts Options) (*mcp.Server, error) {
 	}
 	srv := mcp.NewServer(&mcp.Implementation{Name: "autophage-toolbox", Version: "v1"}, nil)
 	for _, tool := range all {
-		srv.AddTool(&mcp.Tool{Name: tool.Name(), Description: tool.Description(), InputSchema: tool.Schema()}, handler(tool))
+		t := &mcp.Tool{Name: tool.Name(), Description: tool.Description(), InputSchema: tool.Schema()}
+		if ro, ok := tool.(interface{ ReadOnly(json.RawMessage) bool }); ok && ro.ReadOnly(nil) {
+			t.Annotations = &mcp.ToolAnnotations{ReadOnlyHint: true}
+		}
+		srv.AddTool(t, handler(tool))
 	}
 	return srv, nil
 }
