@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -148,6 +149,17 @@ func TestMintTokenRetriesOnRateLimit(t *testing.T) {
 	}
 	if len(f.tokenReqs) != 2 {
 		t.Fatalf("token requests = %d, want 2", len(f.tokenReqs))
+	}
+}
+
+func TestGetIssueNotFoundMapsToSentinel(t *testing.T) {
+	_, srv := newFakeGitHub(t)
+	c := newTestClient(t, srv)
+	// Issue 999 has no registered route; the fake mux's default 404 stands
+	// in for GitHub's own 404 on an unknown issue number.
+	_, err := c.GetIssue(t.Context(), "guy/repo", 999)
+	if !errors.Is(err, resolution.ErrIssueNotFound) {
+		t.Fatalf("err = %v, want it to wrap resolution.ErrIssueNotFound", err)
 	}
 }
 

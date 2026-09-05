@@ -33,3 +33,22 @@ func TestStoreDeliveryIdempotent(t *testing.T) {
 	}
 	_ = time.Now
 }
+
+func TestLastDeliveryAt(t *testing.T) {
+	s := OpenTest(t)
+	ctx := t.Context()
+	if _, ok, err := s.LastDeliveryAt(ctx); err != nil || ok {
+		t.Fatalf("empty store: ok=%v err=%v", ok, err)
+	}
+	if _, err := s.StoreDelivery(ctx, Delivery{ID: "d-1", Event: "issues", Action: "opened", SenderLogin: "guy", Payload: []byte(`{}`), ReceivedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	later := t0.Add(time.Hour)
+	if _, err := s.StoreDelivery(ctx, Delivery{ID: "d-2", Event: "issues", Action: "closed", SenderLogin: "guy", Payload: []byte(`{}`), ReceivedAt: later}); err != nil {
+		t.Fatal(err)
+	}
+	at, ok, err := s.LastDeliveryAt(ctx)
+	if err != nil || !ok || !at.Equal(later) {
+		t.Errorf("last delivery = %v %v %v, want %v", at, ok, err, later)
+	}
+}

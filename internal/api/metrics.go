@@ -3,12 +3,23 @@ package api
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/guygrigsby/autophage/internal/store"
 )
+
+// scrapeTimeout bounds every query a metrics collector runs against the
+// store, so a stuck database cannot hang a scrape indefinitely.
+const scrapeTimeout = 5 * time.Second
+
+// scrapeContext returns a fresh, bounded context for one collector query.
+// The caller must defer the cancel func.
+func scrapeContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), scrapeTimeout)
+}
 
 // metricsHandler serves Prometheus text. Gauges are read from the store on
 // every scrape; counters and the histogram are incremented by the runner
@@ -17,7 +28,9 @@ func metricsHandler(st *store.Store) http.Handler {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(AttemptsTotal, AttemptTokens, AttemptWallClock, DeliveriesTotal)
 	reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "autophage_queue_depth", Help: "Queued cases"}, func() float64 {
-		q, err := st.QueuedCases(contextBackground())
+		ctx, cancel := scrapeContext()
+		defer cancel()
+		q, err := st.QueuedCases(ctx)
 		if err != nil {
 			return 0
 		}
@@ -42,7 +55,9 @@ var casesDesc = prometheus.NewDesc("autophage_cases", "Cases by state", []string
 func (c *stateCollector) Describe(ch chan<- *prometheus.Desc) { ch <- casesDesc }
 
 func (c *stateCollector) Collect(ch chan<- prometheus.Metric) {
-	counts, err := c.st.CountByState(contextBackground())
+	ctx, cancel := scrapeContext()
+	defer cancel()
+	counts, err := c.st.CountByState(ctx)
 	if err != nil {
 		return
 	}
@@ -50,5 +65,3 @@ func (c *stateCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(casesDesc, prometheus.GaugeValue, float64(n), state)
 	}
 }
-
-func contextBackground() context.Context { return context.Background() }

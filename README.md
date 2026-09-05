@@ -20,6 +20,10 @@ make build
 ./autophage status             # authenticated call
 ```
 
+## Building
+
+`go.mod` carries a `replace github.com/guygrigsby/jess => ../jess` directive: the sandbox plan needs `jess/mcp`, which exists only at the sibling checkout until jess is tagged. A later change adds the same for `github.com/guygrigsby/llm` once the OpenRouter adapter lands there. Building this repo means the `jess` checkout (and later `llm`) must exist as a sibling directory of `autophage/` on disk. The trig runbook drops both replace directives once real tags exist upstream.
+
 ## CLI
 
 - `autophage status`: cases by state, running attempts, queue depth.

@@ -102,7 +102,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 // writeErr maps the closed error taxonomy to HTTP.
 func writeErr(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, resolution.ErrIssueNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 	case errors.Is(err, resolution.ErrRefused), errors.Is(err, store.ErrConflict):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "conflict", "detail": err.Error()})

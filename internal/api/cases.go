@@ -32,15 +32,22 @@ func (h *handlers) status(w http.ResponseWriter, r *http.Request) {
 	for _, a := range open {
 		attempting = append(attempting, map[string]any{"attempt_id": a.AttemptID, "repository": a.Repository, "number": a.Number, "ordinal": a.Ordinal, "elapsed_s": int(h.d.Clock.Now().Sub(a.StartedAt).Seconds())})
 	}
-	var last any
-	pending, _ := h.d.Store.UnprocessedDeliveries(ctx)
-	if len(pending) > 0 {
-		last = pending[len(pending)-1].ReceivedAt
+	pending, err := h.d.Store.UnprocessedDeliveries(ctx)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var lastDelivery any
+	if at, ok, err := h.d.Store.LastDeliveryAt(ctx); err != nil {
+		writeErr(w, err)
+		return
+	} else if ok {
+		lastDelivery = at
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version": h.d.Version, "uptime_s": int(h.d.Clock.Now().Sub(h.d.StartedAt).Seconds()),
 		"cases_by_state": counts, "attempting": attempting, "queue_depth": len(queued), "concurrency": h.d.Concurrency,
-		"pending_deliveries": len(pending), "last_pending_delivery_at": last,
+		"pending_deliveries": len(pending), "last_delivery_at": lastDelivery,
 	})
 }
 
@@ -96,7 +103,9 @@ func (h *handlers) getCase(w http.ResponseWriter, r *http.Request) {
 }
 
 // run is the operator's manual start: create the case from GitHub when it
-// does not exist, then record an operator approval.
+// does not exist, then record an operator approval. Refused (conflict) for a
+// repository removed from the installation or, on a new case, an issue
+// already closed on GitHub.
 func (h *handlers) run(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	repo, n, err := caseKey(r)
@@ -104,14 +113,27 @@ func (h *handlers) run(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if _, err := h.d.Store.GetRepository(ctx, repo); err != nil {
+	repository, err := h.d.Store.GetRepository(ctx, repo)
+	if err != nil {
 		writeErr(w, err)
+		return
+	}
+	if !repository.Enrolled() {
+		writeErr(w, resolution.Refused("repository removed from the installation"))
 		return
 	}
 	if _, err := h.d.Store.GetCase(ctx, repo, n); errors.Is(err, store.ErrNotFound) {
 		detail, err := h.d.GitHub.GetIssue(ctx, repo, n)
 		if err != nil {
-			writeErr(w, fmt.Errorf("%w: %v", errUpstream, err))
+			if errors.Is(err, resolution.ErrIssueNotFound) {
+				writeErr(w, err)
+			} else {
+				writeErr(w, fmt.Errorf("%w: %v", errUpstream, err))
+			}
+			return
+		}
+		if !detail.Open {
+			writeErr(w, resolution.Refused("issue is closed on GitHub"))
 			return
 		}
 		c, err := resolution.NewCase(repo, n, detail.Requester, h.d.Clock.Now())

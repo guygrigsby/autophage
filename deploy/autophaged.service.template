@@ -1,11 +1,14 @@
 [Unit]
 Description=autophage daemon
-After=network-online.target postgresql.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 ExecStart={{INSTALL_DIR}}/autophaged
+# Postgres is a system service; a user unit's After= cannot order against it
+# (separate systemd manager instance), so on a boot race the daemon just
+# retries until Postgres is reachable, restarting every 5s until it connects.
 Restart=always
 RestartSec=5s
 EnvironmentFile=%h/.config/autophage/env

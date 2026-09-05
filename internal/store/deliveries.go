@@ -57,6 +57,20 @@ func (s *Store) UnprocessedDeliveries(ctx context.Context) ([]Delivery, error) {
 	return out, rows.Err()
 }
 
+// LastDeliveryAt reports the most recent delivery's received_at, across
+// every stored delivery whether processed or not. ok is false when none
+// have arrived yet.
+func (s *Store) LastDeliveryAt(ctx context.Context) (time.Time, bool, error) {
+	var at *time.Time
+	if err := s.pool.QueryRow(ctx, `select max(received_at) from webhook_deliveries`).Scan(&at); err != nil {
+		return time.Time{}, false, err
+	}
+	if at == nil {
+		return time.Time{}, false, nil
+	}
+	return *at, true, nil
+}
+
 // RecordProcessing marks a delivery processed exactly once.
 func (s *Store) RecordProcessing(ctx context.Context, deliveryID, result, detail string) error {
 	_, err := s.pool.Exec(ctx, `insert into webhook_delivery_processings (delivery_id, result, detail) values ($1, $2, $3)`, deliveryID, result, detail)

@@ -159,6 +159,10 @@ func (c *Client) GetIssue(ctx context.Context, repository string, number int) (r
 	owner, name := splitRepo(repository)
 	is, _, err := api.Issues.Get(ctx, owner, name, number)
 	if err != nil {
+		var ghErr *gh.ErrorResponse
+		if errors.As(err, &ghErr) && ghErr.Response != nil && ghErr.Response.StatusCode == http.StatusNotFound {
+			return resolution.IssueDetail{}, fmt.Errorf("github: get issue %s#%d: %w", repository, number, resolution.ErrIssueNotFound)
+		}
 		return resolution.IssueDetail{}, fmt.Errorf("github: get issue %s#%d: %w", repository, number, err)
 	}
 	assoc, err := resolution.ParseAssociation(is.GetAuthorAssociation())
