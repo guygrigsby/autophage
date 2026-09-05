@@ -60,12 +60,15 @@ func (s *Store) EnqueueOutcomeComment(ctx context.Context, attemptID, body strin
 	})
 }
 
-// UnpostedComments lists outbox rows with no post, oldest first.
+// UnpostedComments lists outbox rows with no post, oldest first, for
+// enrolled repositories only. The App has no access to a repository it was
+// removed from, so posting there fails every sweep for ever.
 func (s *Store) UnpostedComments(ctx context.Context) ([]Comment, error) {
 	rows, err := s.pool.Query(ctx, `select g.id, g.case_id, c.repository, c.number, g.body, g.created_at
 		from github_comments g join cases c on c.id = g.case_id
 		left join github_comment_posts p on p.comment_id = g.id
-		where p.comment_id is null order by g.created_at, g.id`)
+		left join repository_removals x on x.repository = c.repository
+		where p.comment_id is null and x.repository is null order by g.created_at, g.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -88,21 +91,28 @@ func (s *Store) RecordCommentPost(ctx context.Context, commentID string, githubC
 }
 
 // TriagesNeedingComment lists cases parked by a Large triage with no comment
-// queued yet.
+// queued yet, in enrolled repositories only.
 func (s *Store) TriagesNeedingComment(ctx context.Context) ([]CaseKey, error) {
 	return s.keys(ctx, `select c.repository, c.number from cases c
 		join case_triages t on t.case_id = c.id
 		left join case_triage_comments m on m.case_id = c.id
-		where t.size = 'large' and m.case_id is null order by t.triaged_at`)
+		left join repository_removals x on x.repository = c.repository
+		where t.size = 'large' and m.case_id is null and x.repository is null
+		order by t.triaged_at`)
 }
 
 // OutcomesNeedingComment lists attempts whose outcome is reported as a
-// comment (exhausted, failed, operator stop) and has none queued yet.
+// comment (exhausted, failed, operator stop) and has none queued yet, in
+// enrolled repositories only.
 func (s *Store) OutcomesNeedingComment(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `select o.attempt_id from attempt_outcomes o
+		join attempts a on a.id = o.attempt_id
+		join cases c on c.id = a.case_id
 		left join attempt_outcome_aborts b on b.attempt_id = o.attempt_id
 		left join attempt_outcome_comments m on m.attempt_id = o.attempt_id
-		where m.attempt_id is null and (o.kind in ('budget_exhausted', 'failed') or b.reason = 'operator_stop')
+		left join repository_removals x on x.repository = c.repository
+		where m.attempt_id is null and x.repository is null
+			and (o.kind in ('budget_exhausted', 'failed') or b.reason = 'operator_stop')
 		order by o.ended_at`)
 	if err != nil {
 		return nil, err

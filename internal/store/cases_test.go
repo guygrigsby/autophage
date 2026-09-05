@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,5 +204,161 @@ func TestQueries(t *testing.T) {
 	gated, _, _ := s.ListCases(ctx, store.CaseFilter{State: "gated", Limit: 10})
 	if len(gated) != 1 || gated[0].Number != 3 || gated[0].LatestOutcomeKind != "none" {
 		t.Errorf("gated = %+v", gated)
+	}
+	if _, _, err := s.ListCases(ctx, store.CaseFilter{After: "not-a-cursor"}); !errors.Is(err, store.ErrBadCursor) {
+		t.Errorf("bad cursor = %v, want ErrBadCursor", err)
+	}
+}
+
+// TestScansSkipRemovedRepositories proves every scan that feeds a service
+// leaves a removed repository's work alone, the way QueuedCases already did.
+// The App has no access to a repository it was removed from, so triaging or
+// commenting on one is a call that fails every sweep for ever.
+func TestScansSkipRemovedRepositories(t *testing.T) {
+	s := storetest.Open(t)
+	ctx := t.Context()
+	seedRepo(t, s, "guy/gone")
+	b, _ := resolution.NewBudget(10, time.Hour, 500)
+	triage := func(n int, size resolution.Size) {
+		t.Helper()
+		if _, err := s.UpdateCase(ctx, "guy/gone", n, func(c *resolution.Case) error {
+			return c.RecordTriage(resolution.Triage{Size: size, Rationale: "r", Model: "m", TriagedAt: t0})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, n := range []int{2, 3, 4, 5} {
+		c, err := resolution.NewCase("guy/gone", n, owner(t), t0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.CreateCase(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 2 wants triage, 3 wants a triage comment, 4 already has one queued
+	// and unposted, 5 has a failed outcome that wants a comment.
+	triage(3, resolution.Large)
+	triage(4, resolution.Large)
+	four, _ := s.GetCase(ctx, "guy/gone", 4)
+	if err := s.EnqueueTriageComment(ctx, four.ID(), "sized large"); err != nil {
+		t.Fatal(err)
+	}
+	triage(5, resolution.Small)
+	five, err := s.UpdateCase(ctx, "guy/gone", 5, func(c *resolution.Case) error {
+		_, err := c.StartAttempt(resolution.Auto, b, "brief", t0)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attemptID := five.OpenAttempt().ID
+	o, _ := resolution.OutcomeFailed(resolution.FailureInfra, "podman died", resolution.Usage{}, t0)
+	if _, err := s.UpdateCase(ctx, "guy/gone", 5, func(c *resolution.Case) error { return c.RecordOutcome(attemptID, o) }); err != nil {
+		t.Fatal(err)
+	}
+
+	scans := map[string]func() int{
+		"ReceivedWithoutTriage":  func() int { k, _ := s.ReceivedWithoutTriage(ctx); return len(k) },
+		"TriagesNeedingComment":  func() int { k, _ := s.TriagesNeedingComment(ctx); return len(k) },
+		"OutcomesNeedingComment": func() int { k, _ := s.OutcomesNeedingComment(ctx); return len(k) },
+		"UnpostedComments":       func() int { k, _ := s.UnpostedComments(ctx); return len(k) },
+	}
+	for name, scan := range scans {
+		if n := scan(); n != 1 {
+			t.Fatalf("%s while enrolled = %d, want 1", name, n)
+		}
+	}
+	if err := s.RemoveRepository(ctx, "guy/gone", t0); err != nil {
+		t.Fatal(err)
+	}
+	for name, scan := range scans {
+		if n := scan(); n != 0 {
+			t.Errorf("%s after removal = %d, want 0", name, n)
+		}
+	}
+}
+
+// TestRunNeedsItsAttempt proves the run insert reports a missing attempt
+// instead of writing nothing and calling it a success. Changes are keyed by
+// ordinal, so an ordinal the store cannot resolve has to be an error.
+func TestRunNeedsItsAttempt(t *testing.T) {
+	s := storetest.Open(t)
+	ctx := t.Context()
+	seedRepo(t, s, "guy/repo")
+	newCase(t, s, 7, owner(t))
+	b, _ := resolution.NewBudget(10, time.Hour, 500)
+	if _, err := s.UpdateCase(ctx, "guy/repo", 7, func(c *resolution.Case) error {
+		return c.RecordTriage(resolution.Triage{Size: resolution.Small, Rationale: "typo", Model: "m", TriagedAt: t0})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.UpdateCase(ctx, "guy/repo", 7, func(c *resolution.Case) error {
+		_, err := c.StartAttempt(resolution.Auto, b, "brief", t0)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Persisting a run against an ordinal the case does not have: the
+	// aggregate cannot produce this, so it is forced through the store's
+	// own change set.
+	run := resolution.Run{RunID: "run-1", Model: "m", BaseSha: "0123456789abcdef0123456789abcdef01234567", BeganAt: t0}
+	err = store.PersistRunForTest(ctx, s, c.ID(), 9, run)
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("run against a missing attempt = %v, want ErrNotFound", err)
+	}
+	got, _ := s.GetCase(ctx, "guy/repo", 7)
+	if got.OpenAttempt().Run != nil {
+		t.Errorf("run landed anyway: %+v", got.OpenAttempt().Run)
+	}
+}
+
+// TestCreateCaseLeavesTheAggregateAloneWhenItRollsBack proves the aggregate
+// is only told about its id, and told to forget its changes, once the row is
+// actually committed. Anything that fails after the insert but inside the
+// transaction rolls the row back, and a Case left holding an id no row has
+// and no changes to retry with cannot be recovered from.
+//
+// The failure is forced through pg_notify's 8000-byte payload ceiling: the
+// notify is the last statement in the transaction, so a repository name long
+// enough to overflow the payload fails exactly in the window that matters.
+func TestCreateCaseLeavesTheAggregateAloneWhenItRollsBack(t *testing.T) {
+	s := storetest.Open(t)
+	ctx := t.Context()
+	long := "guy/" + strings.Repeat("n", 8000)
+	// Inserted directly: EnrollRepository notifies on the same channel and
+	// would trip the same ceiling before the case exists.
+	if _, err := s.Pool().Exec(ctx, `insert into repositories (full_name, installation_id, default_branch) values ($1, 1, 'main')`, long); err != nil {
+		t.Fatal(err)
+	}
+	c, err := resolution.NewCase(long, 7, owner(t), t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateCase(ctx, c); err == nil {
+		t.Fatal("oversized notify payload accepted")
+	}
+	if c.ID() != "" {
+		t.Errorf("id assigned though the row rolled back: %q", c.ID())
+	}
+	if c.Changes().State != resolution.Received {
+		t.Errorf("changes cleared though the row rolled back: %+v", c.Changes())
+	}
+	if _, err := s.GetCase(ctx, long, 7); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("row survived the rollback: %v", err)
+	}
+	// A conflict is the other way in and must leave the same nothing.
+	seedRepo(t, s, "guy/repo")
+	newCase(t, s, 7, owner(t))
+	second, err := resolution.NewCase("guy/repo", 7, owner(t), t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateCase(ctx, second); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("duplicate = %v", err)
+	}
+	if second.ID() != "" || second.Changes().State != resolution.Received {
+		t.Errorf("conflict disturbed the aggregate: id %q changes %+v", second.ID(), second.Changes())
 	}
 }

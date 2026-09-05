@@ -1,4 +1,10 @@
 -- +goose Up
+-- The migration set is up-only by policy: no Down block anywhere in it.
+-- autophage rolls forward. Every table here is an append-only record of
+-- what happened, so a Down that dropped one would delete the history the
+-- aggregates are rebuilt from, and a schema change that needs the old
+-- shape back gets a new numbered migration that puts it back.
+
 CREATE TABLE case_states        (state TEXT PRIMARY KEY);
 INSERT INTO case_states VALUES ('received'), ('gated'), ('queued'), ('attempting'), ('awaiting_approval'), ('failed'), ('done'), ('closed');
 

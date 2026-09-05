@@ -2,10 +2,15 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 )
+
+// ErrBadCursor marks a cursor ListCases could not parse, so the caller can
+// tell the one failure the requester caused from the store failing.
+var ErrBadCursor = errors.New("bad cursor")
 
 // CaseFilter narrows ListCases. After is the cursor a previous page returned.
 type CaseFilter struct {
@@ -52,7 +57,7 @@ func (s *Store) ListCases(ctx context.Context, f CaseFilter) ([]CaseRow, string,
 		ts, id, ok := strings.Cut(f.After, "|")
 		at, err := time.Parse(time.RFC3339Nano, ts)
 		if !ok || err != nil {
-			return nil, "", fmt.Errorf("bad cursor")
+			return nil, "", ErrBadCursor
 		}
 		args = append(args, at, id)
 		where = append(where, fmt.Sprintf("(c.received_at, c.id) < ($%d, $%d)", len(args)-1, len(args)))
@@ -100,11 +105,15 @@ func (s *Store) QueuedCases(ctx context.Context) ([]CaseKey, error) {
 		order by q.occurred_at, c.id`)
 }
 
-// ReceivedWithoutTriage lists trusted cases the triage service has not sized.
+// ReceivedWithoutTriage lists trusted cases the triage service has not
+// sized, in enrolled repositories only: a removed repository's cases will
+// never run, so spending a model call sizing them is waste.
 func (s *Store) ReceivedWithoutTriage(ctx context.Context) ([]CaseKey, error) {
 	return s.keys(ctx, `select c.repository, c.number from cases c
 		left join case_triages t on t.case_id = c.id
-		where c.state = 'received' and t.case_id is null order by c.received_at, c.id`)
+		left join repository_removals x on x.repository = c.repository
+		where c.state = 'received' and t.case_id is null and x.repository is null
+		order by c.received_at, c.id`)
 }
 
 func (s *Store) keys(ctx context.Context, q string) ([]CaseKey, error) {

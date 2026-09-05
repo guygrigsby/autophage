@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 // ErrNotFound is returned when a row the caller named does not exist.
@@ -36,8 +38,14 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	return &Store{pool: pool}, nil
 }
 
-// Pool exposes the pool for readers that need it (the jess ledger shares it).
+// Pool exposes the pool for readers that need it.
 func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
+// SQLDB opens a database/sql handle over the same pool, for libraries that
+// take one rather than a pgx pool (jess/ledger). It keeps pgx inside this
+// package: the daemon asks for a *sql.DB and never names the driver. The
+// caller closes what it gets back.
+func (s *Store) SQLDB() *sql.DB { return stdlib.OpenDBFromPool(s.pool) }
 
 func (s *Store) Close() { s.pool.Close() }
 

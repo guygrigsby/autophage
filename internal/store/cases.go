@@ -25,10 +25,13 @@ func isUnique(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
-// CreateCase inserts a new case and assigns its id.
+// CreateCase inserts a new case and assigns its id. The aggregate is only
+// told about the id and told to forget its changes once the transaction has
+// committed: a rollback after that would leave the caller holding a Case
+// claiming an id no row has and no changes left to retry with.
 func (s *Store) CreateCase(ctx context.Context, c *resolution.Case) error {
-	return s.tx(ctx, func(tx pgx.Tx) error {
-		var id string
+	var id string
+	err := s.tx(ctx, func(tx pgx.Tx) error {
 		r := c.Requester()
 		err := tx.QueryRow(ctx, `insert into cases (repository, number, requester_login, requester_association, requester_trust, state, received_at)
 			values ($1, $2, $3, $4, $5, $6, $7) returning id`,
@@ -39,12 +42,16 @@ func (s *Store) CreateCase(ctx context.Context, c *resolution.Case) error {
 		if err != nil {
 			return err
 		}
-		if err := c.AssignID(id); err != nil {
-			return err
-		}
-		c.ClearChanges()
 		return notify(ctx, tx, casePayload(c))
 	})
+	if err != nil {
+		return err
+	}
+	if err := c.AssignID(id); err != nil {
+		return err
+	}
+	c.ClearChanges()
+	return nil
 }
 
 func casePayload(c *resolution.Case) string {
@@ -114,9 +121,15 @@ func persistChanges(ctx context.Context, tx pgx.Tx, c *resolution.Case) error {
 		}
 	}
 	for ordinal, r := range ch.Runs {
+		// Look the attempt up rather than insert-select on it: a select
+		// that matches nothing inserts no row and reports success, so an
+		// ordinal with no attempt would lose the run silently.
+		attemptID, err := attemptIDFor(ctx, tx, id, ordinal)
+		if err != nil {
+			return fmt.Errorf("run: %w", err)
+		}
 		if _, err := tx.Exec(ctx, `insert into attempt_runs (attempt_id, run_id, model, base_sha, began_at)
-			select id, $3, $4, $5, $6 from attempts where case_id = $1 and ordinal = $2`,
-			id, ordinal, r.RunID, r.Model, r.BaseSha, r.BeganAt); err != nil {
+			values ($1, $2, $3, $4, $5)`, attemptID, r.RunID, r.Model, r.BaseSha, r.BeganAt); err != nil {
 			return fmt.Errorf("run: %w", err)
 		}
 	}
@@ -142,9 +155,24 @@ func persistChanges(ctx context.Context, tx pgx.Tx, c *resolution.Case) error {
 	return nil
 }
 
-func insertOutcome(ctx context.Context, tx pgx.Tx, caseID string, ordinal int, o resolution.Outcome) error {
+// attemptIDFor resolves a case's attempt by ordinal. Changes are keyed by
+// ordinal because attempt ids belong to the store, so every write against an
+// attempt starts here.
+func attemptIDFor(ctx context.Context, tx pgx.Tx, caseID string, ordinal int) (string, error) {
 	var attemptID string
-	if err := tx.QueryRow(ctx, `select id from attempts where case_id = $1 and ordinal = $2`, caseID, ordinal).Scan(&attemptID); err != nil {
+	err := tx.QueryRow(ctx, `select id from attempts where case_id = $1 and ordinal = $2`, caseID, ordinal).Scan(&attemptID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("case %s has no attempt %d: %w", caseID, ordinal, ErrNotFound)
+	}
+	if err != nil {
+		return "", err
+	}
+	return attemptID, nil
+}
+
+func insertOutcome(ctx context.Context, tx pgx.Tx, caseID string, ordinal int, o resolution.Outcome) error {
+	attemptID, err := attemptIDFor(ctx, tx, caseID, ordinal)
+	if err != nil {
 		return fmt.Errorf("outcome attempt: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `insert into attempt_outcomes (attempt_id, kind, ended_at, turns, input_tokens, output_tokens, wall_clock, diff_lines, summary)
@@ -152,7 +180,6 @@ func insertOutcome(ctx context.Context, tx pgx.Tx, caseID string, ordinal int, o
 		attemptID, string(o.Kind), o.EndedAt, o.Usage.Turns, o.Usage.InputTokens, o.Usage.OutputTokens, toInterval(o.Usage.WallClock), o.Usage.DiffLines, o.Summary); err != nil {
 		return fmt.Errorf("outcome: %w", err)
 	}
-	var err error
 	switch o.Kind {
 	case resolution.PullRequestOpened:
 		_, err = tx.Exec(ctx, `insert into attempt_outcome_pull_requests (attempt_id, kind, pr_number, head_sha) values ($1, $2, $3, $4)`, attemptID, string(o.Kind), o.PRNumber, o.HeadSha)

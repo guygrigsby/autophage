@@ -26,7 +26,12 @@ func TestMigrationMatchesContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The generated file opens with the goose directive and the up-only
+	// policy note; the DDL the contracts own starts at the first statement.
 	body := strings.TrimPrefix(string(mig), "-- +goose Up\n")
+	for strings.HasPrefix(body, "--") || strings.HasPrefix(body, "\n") {
+		_, body, _ = strings.Cut(body, "\n")
+	}
 	if strings.TrimSpace(body) != strings.TrimSpace(want.String()) {
 		t.Fatalf("migration drifted from the contracts DDL; regenerate with:\n  scripts/ddl-from-contracts.sh > internal/store/migrations/0001_init.sql")
 	}
