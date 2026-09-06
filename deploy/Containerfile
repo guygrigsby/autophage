@@ -1,5 +1,5 @@
 # autophage sandbox: every attempt runs its tools in a fresh container from
-# this image. No secrets, no network in the agent phase. Built on trig by
+# this image. No secrets, no network in the agent phase. Built on the deploy host by
 # `make image`.
 #
 # Build context is the parent of this checkout (see the Makefile's `image`

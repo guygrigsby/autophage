@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** The agent side: OpenRouter models per tier, the triage model call, the budgeted jess run with steers and the forced summary, the runner that takes a started attempt from token to outcome through the sandbox, the issue-closed cancellation, the daemon wiring, one end-to-end test on the real path and the deployment runbook for trig.
+**Goal:** The agent side: OpenRouter models per tier, the triage model call, the budgeted jess run with steers and the forced summary, the runner that takes a started attempt from token to outcome through the sandbox, the issue-closed cancellation, the daemon wiring, one end-to-end test on the real path and the deployment runbook for the deploy host.
 
 **Architecture:** `internal/agent` is the only package that imports jess, agentcore and llm. `Models` builds one `llm.LLM` per tier through `llm/openrouter`. `Triager` is one model call with a JSON-shaped answer. `RunAttempt` builds a jess agent over the sandbox's tools, enforces the budget (turns via jess, wall clock via context deadline, diff lines by wrapping every tool), injects the 80% steers and forces the summary turn. `Runner` implements `resolution.Runner`: mint token, prepare workspace, start container, dial tools, run, commit and push, open the PR or record the exhaustion or failure, tear down, record the outcome. The dispatcher gains one hook so a closed issue cancels its running attempt.
 
@@ -12,14 +12,14 @@
 
 ## Global Constraints
 
-- Repo `/Users/guygrigsby/projects/autophage`, Go 1.26, commits straight to `main`. Plans C and D complete.
+- Repo `~/projects/autophage`, Go 1.26, commits straight to `main`. Plans C and D complete.
 - Only `internal/agent` imports jess root, agentcore and llm. `internal/sandbox` keeps `jess/mcp`. `internal/api/why.go` keeps `jess/ledger`.
 - Until llm is tagged with `openrouter/`, `go.mod` carries `replace github.com/guygrigsby/llm => ../llm` beside the jess one. Drop both when tags exist.
 - The model key and the GitHub token never enter the container; the runner passes the token only to `sandbox.Prepare` and `CommitAndPush`.
 - Inside the sandbox the jess gate is `jess.AllowAll()`; the ledger is the Postgres one, shared with the store's pool. Every attempt's run id is recorded on the case before the first tool call can happen.
 - Budget enforcement: turns through `jess.WithMaxTurns`, wall clock through a context deadline, diff lines checked after every tool call; steers at 80%; a forced summary turn ends every run that produced no summary.
 - No em or en dashes and no Oxford commas anywhere. Commit messages terse, verb-first, prefixed `agent:`, `app:`, `daemon:`, `e2e:`, `docs:`. No Claude or Anthropic attribution, no `Co-Authored-By` or `Claude-Session` trailers of any kind. `make check` green before every commit. `git add <paths>`, never `git add -A`. `for i := range n` for counts. Do not push.
-- trig is a deploy target: nothing is edited there; verification on trig uses a synced throwaway copy as in Plan D until the repos are pushed.
+- The deploy host is a deploy target: nothing is edited there; verification on the deploy host uses a synced throwaway copy as in Plan D until the repos are pushed.
 
 ---
 
@@ -291,7 +291,7 @@ func TestE2E_TriageOnOpenRouter(t *testing.T) {
 - [ ] **Step 4: Run the tests**
 
 Run: `go test ./internal/agent/ -v 2>&1 | tail -12 && go vet -tags e2e ./internal/agent/`
-Expected: four PASS; the e2e file compiles. If the op cache holds `OPENROUTER_API_KEY`, run the e2e once (`set -a; . ~/Library/Caches/op-secrets.env; set +a; go test -tags e2e ./internal/agent/ -run TestE2E_Triage -v`) and record the result without printing the key.
+Expected: four PASS; the e2e file compiles. If `OPENROUTER_API_KEY` is in the environment, run the e2e once (`go test -tags e2e ./internal/agent/ -run TestE2E_Triage -v`) and record the result without printing the key.
 
 - [ ] **Step 5: Commit**
 
@@ -519,7 +519,7 @@ func TestRunModelError(t *testing.T) {
 }
 ```
 
-`ledger.NewSQLite(path)` is jess's SQLite constructor; if its name is `OpenSQLite`, use that (read `/Users/guygrigsby/projects/jess/ledger/sqlite.go`). `ledger.DiscardSink{}` is not a `DurableSink`; with it jess denies every non-safe tool, so the first test uses SQLite to prove the tool actually ran and the others accept denial as "the tool returned an error", which the scripted model ignores. If `DiscardSink` makes those tests fail on tool denial, use the SQLite ledger in `input` for all of them.
+`ledger.NewSQLite(path)` is jess's SQLite constructor; if its name is `OpenSQLite`, use that (read `~/projects/jess/ledger/sqlite.go`). `ledger.DiscardSink{}` is not a `DurableSink`; with it jess denies every non-safe tool, so the first test uses SQLite to prove the tool actually ran and the others accept denial as "the tool returned an error", which the scripted model ignores. If `DiscardSink` makes those tests fail on tool denial, use the SQLite ledger in `input` for all of them.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1575,9 +1575,9 @@ e2e: ## Run the end to end test (needs podman, the image and Docker or AUTOPHAGE
 	go test -tags e2e ./internal/e2e/ -run TestEndToEnd -v -timeout 15m
 ```
 
-- [ ] **Step 3: Run it on trig**
+- [ ] **Step 3: Run it on the deploy host**
 
-Sync the throwaway copy as in Plan D (autophage, jess and llm), then `ssh trig 'cd /tmp/autophage-image/autophage && make image >/dev/null && AUTOPHAGE_TEST_DSN=... make e2e 2>&1 | tail -40'` with a local Postgres on trig (Task 6 installs it; for this test a `podman run postgres:17-alpine` on a port is enough). Expected: PASS. Record the output in the report and delete the throwaway copy.
+Sync the throwaway copy as in Plan D (autophage, jess and llm), then `ssh <host> 'cd /tmp/autophage-image/autophage && make image >/dev/null && AUTOPHAGE_TEST_DSN=... make e2e 2>&1 | tail -40'` with a local Postgres on the deploy host (Task 6 installs it; for this test a `podman run postgres:17-alpine` on a port is enough). Expected: PASS. Record the output in the report and delete the throwaway copy.
 
 - [ ] **Step 4: Commit**
 
@@ -1587,29 +1587,29 @@ make check && git add internal/e2e/ Makefile && git commit -m "e2e: webhook to p
 
 ---
 
-### Task 6: Deployment runbook and first live run on trig
+### Task 6: Deployment runbook and first live run on the deploy host
 
 **Files:**
-- Create: `docs/runbooks/deploy-trig.md`
+- Create: `docs/runbooks/deploy.md`
 - Modify: `README.md` (link)
 
 The runbook, executed by the operator, in order:
 
 1. Push and tag: `llm` (`v0.4.0`), `jess` (first tag `v0.1.0`), `gyr` (drop its replace after jess is tagged), `autophage` (drop both replaces, `go mod tidy`, commit). Only the operator pushes.
-2. Postgres on trig: `sudo dnf install -y postgresql-server postgresql-contrib && sudo postgresql-setup --initdb && sudo systemctl enable --now postgresql && sudo -u postgres createuser guygrigsby && sudo -u postgres createdb -O guygrigsby autophage`. Peer auth over the socket; `db.url = "postgres:///autophage?host=/var/run/postgresql"`.
-3. Checkout on trig: `git clone git@github.com:guygrigsby/autophage.git ~/projects/autophage` (read access through the existing ssh key), `make image`, `make image-test`.
-4. GitHub App: register at github.com/settings/apps/new named `autophage`: webhook URL `https://trig.guy.ts.net/webhook/github`, a generated webhook secret, permissions contents write, issues write, pull requests write, metadata read, events issues, installation, installation_repositories; download the private key to `~/.config/autophage/app.pem` (0600); note the App id and the bot login (`autophage[bot]`).
-5. Secrets: `~/.config/autophage/env` (0600) with `AUTOPHAGE_GITHUB_WEBHOOK_SECRET=...` and `OPENROUTER_API_KEY=...` from the op cache.
+2. Postgres on <host>: `sudo dnf install -y postgresql-server postgresql-contrib && sudo postgresql-setup --initdb && sudo systemctl enable --now postgresql && sudo -u postgres createuser guygrigsby && sudo -u postgres createdb -O guygrigsby autophage`. Peer auth over the socket; `db.url = "postgres:///autophage?host=/var/run/postgresql"`.
+3. Checkout on <host>: `git clone git@github.com:guygrigsby/autophage.git ~/projects/autophage` (read access through the existing ssh key), `make image`, `make image-test`.
+4. GitHub App: register at github.com/settings/apps/new named `autophage`: webhook URL `https://<host>.<tailnet>.ts.net/webhook/github`, a generated webhook secret, permissions contents write, issues write, pull requests write, metadata read, events issues, installation, installation_repositories; download the private key to `~/.config/autophage/app.pem` (0600); note the App id and the bot login (`autophage[bot]`).
+5. Secrets: `~/.config/autophage/env` (0600) with `AUTOPHAGE_GITHUB_WEBHOOK_SECRET=...` and `OPENROUTER_API_KEY=...` from your secret store.
 6. Config: `~/.config/autophage/config.toml` from `config.example.toml` with `app_id`, `operator_login = "guygrigsby"`, the three model ids, `sandbox.concurrency = 2`.
-7. Funnel: `tailscale funnel --bg --set-path /webhook/github http://127.0.0.1:8080/webhook/github`; `curl -si https://trig.guy.ts.net/webhook/github -X POST` must return 401 (unauthenticated, meaning the daemon answered). If Funnel is refused by the tailnet policy, enable it in the admin console's ACL (`"nodeAttrs": [{"target": ["trig"], "attr": ["funnel"]}]`).
+7. Funnel: `tailscale funnel --bg --set-path /webhook/github http://127.0.0.1:8080/webhook/github`; `curl -si https://<host>.<tailnet>.ts.net/webhook/github -X POST` must return 401 (unauthenticated, meaning the daemon answered). If Funnel is refused by the tailnet policy, enable it in the admin console's ACL (`"nodeAttrs": [{"target": ["<host>"], "attr": ["funnel"]}]`).
 8. Service: `make install-systemd && systemctl --user status autophaged && loginctl enable-linger $USER`.
 9. Install the App on one test repository; open an issue as the owner with a small typo; `autophage cases` shows it Received then Queued then Attempting; within the auto budget it ends Done with a PR or AwaitingApproval with a comment. `autophage why <attempt>` prints the chain.
-10. Metrics: add `https://trig.guy.ts.net/metrics` to bee's Prometheus over the tailnet (`tailscale serve --bg --set-path /metrics http://127.0.0.1:8080/metrics` on trig, tailnet only).
+10. Metrics: add `https://<host>.<tailnet>.ts.net/metrics` to the Prometheus host's scrape config over the tailnet (`tailscale serve --bg --set-path /metrics http://127.0.0.1:8080/metrics` on the deploy host, tailnet only).
 
 - [ ] **Step 1: Write the runbook and commit**
 
 ```bash
-git add docs/runbooks/deploy-trig.md README.md && git commit -m "docs: trig deployment runbook"
+git add docs/runbooks/deploy.md README.md && git commit -m "docs: deployment runbook"
 ```
 
 - [ ] **Step 2: Execute it**

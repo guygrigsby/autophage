@@ -9,7 +9,7 @@ The operator wants Kimi K3 and other non-Anthropic models per tier without a pro
 
 ## Decision
 
-OpenRouter is the provider for every tier. `llm` gains `llm/openrouter`, a native adapter for OpenRouter's own API (chat completions wire format, OpenRouter headers, reasoning passthrough, usage accounting), contributed upstream rather than kept in autophage. Config names one OpenRouter model id per tier: triage, auto attempt, approved attempt. The key is `OPENROUTER_API_KEY` from the op cache.
+OpenRouter is the provider for every tier. `llm` gains `llm/openrouter`, a native adapter for OpenRouter's own API (chat completions wire format, OpenRouter headers, reasoning passthrough, usage accounting), contributed upstream rather than kept in autophage. Config names one OpenRouter model id per tier: triage, auto attempt, approved attempt. The key is `OPENROUTER_API_KEY` from the operator's secret store.
 
 ## Consequences
 

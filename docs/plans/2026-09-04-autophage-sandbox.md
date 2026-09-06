@@ -6,18 +6,18 @@
 
 **Architecture:** `cmd/autophage-toolbox` is a tiny MCP server over agentcore's `read`, `write`, `edit`, `grep`, `glob`, `ls` and `bash`, rooted at `/work`. `deploy/Containerfile` builds one image with Go, Node, Python with uv, git, make and the toolbox, plus `warm-deps` for the networked prep phase. `internal/sandbox` is the only package that shells out to `podman` and `git`; it exposes a `Sandbox` interface in its own types (a workspace, a container, tools) that the runner in Plan E consumes. The container is the security boundary: no secrets inside, `--network=none` for the agent phase, all tools executed inside via `podman exec -i`.
 
-**Tech Stack:** Go 1.26, `github.com/modelcontextprotocol/go-sdk v1.6.1` (server side, in the toolbox only), `github.com/voocel/agentcore v1.6.9` tools, `github.com/guygrigsby/jess/mcp` (client side, in the adapter), podman 5.x rootless on trig, git.
+**Tech Stack:** Go 1.26, `github.com/modelcontextprotocol/go-sdk v1.6.1` (server side, in the toolbox only), `github.com/voocel/agentcore v1.6.9` tools, `github.com/guygrigsby/jess/mcp` (client side, in the adapter), podman 5.x rootless on the deploy host, git.
 
 **Spec:** `docs/specs/2026-09-04-autophage-design.md` (Sandbox section), `docs/adr/0002-sandbox-posture.md`, `docs/specs/2026-09-04-autophage-contracts.md` (the Sandbox port rows). Deviation recorded here: the Sandbox port lives in `internal/sandbox`, not `internal/resolution`, because its signatures carry tools and containers, which are not domain types; the contracts document is updated in Task 3.
 
 ## Global Constraints
 
-- Repo `/Users/guygrigsby/projects/autophage`, module `github.com/guygrigsby/autophage`, Go 1.26, commits straight to `main`. Plan C's Tasks 1 to 3 (the `internal/resolution` package) must exist; nothing else from Plan C is needed.
+- Repo `~/projects/autophage`, module `github.com/guygrigsby/autophage`, Go 1.26, commits straight to `main`. Plan C's Tasks 1 to 3 (the `internal/resolution` package) must exist; nothing else from Plan C is needed.
 - Only `internal/sandbox` runs `podman` or `git`. Only `cmd/autophage-toolbox` imports the MCP SDK server. Only `internal/sandbox` imports `jess/mcp`.
 - The container never receives a secret. Tokens are used by host-side git only, as a per-command header, never written to `.git/config`.
 - Agent phase containers: `--network=none`, `--userns=keep-id`, `--cap-drop=all`, `--security-opt=no-new-privileges`, `--read-only` root with `--tmpfs /tmp`, memory, cpu and pids limits, the workspace at `/work`, cache volumes at `/cache`.
 - Until jess is tagged with `mcp/`, `go.mod` carries `replace github.com/guygrigsby/jess => ../jess`; the same for llm in Plan E. Drop both when tags exist.
-- Tests that need podman or the image skip with a clear message when they are absent (the Mac has neither); they run on trig. Every skip prints why.
+- Tests that need podman or the image skip with a clear message when they are absent (a workstation without podman has neither); they run on the deploy host. Every skip prints why.
 - No em or en dashes and no Oxford commas anywhere. Commit messages terse, verb-first, prefixed `toolbox:`, `image:`, `sandbox:`. No Claude or Anthropic attribution, no `Co-Authored-By` or `Claude-Session` trailers of any kind. `make check` green before every commit. `git add <paths>`, never `git add -A`. `for i := range n` for counts. Do not push.
 
 ---
@@ -341,7 +341,7 @@ echo "✓ image ok"
 ```
 
 Run: `chmod +x deploy/image_test.sh && deploy/image_test.sh`
-Expected: fails because the image does not exist (podman missing on the Mac also fails; this task's verification is on trig, see Step 4).
+Expected: fails because the image does not exist (podman missing locally also fails; this task's verification is on the deploy host, see Step 4).
 
 - [ ] **Step 2: Write the Containerfile and warm-deps**
 
@@ -349,7 +349,7 @@ Expected: fails because the image does not exist (podman missing on the Mac also
 
 ```dockerfile
 # autophage sandbox: every attempt runs its tools in a fresh container from
-# this image. No secrets, no network in the agent phase. Built on trig by
+# this image. No secrets, no network in the agent phase. Built on the deploy host by
 # `make image`.
 FROM docker.io/library/golang:1.26-bookworm AS toolbox
 WORKDIR /src
@@ -386,7 +386,7 @@ ENV HOME=/home/agent \
 WORKDIR /work
 ```
 
-The toolbox stage copies `../jess` because of the `replace` directive; podman's build context must therefore be `/Users/guygrigsby/projects` (or `~/projects` on trig) with `-f autophage/deploy/Containerfile`. Adjust the `COPY` lines to `COPY autophage/go.mod autophage/go.sum ./`, `COPY jess /jess`, `COPY autophage/ .` and `COPY autophage/deploy/warm-deps ...` accordingly, and in the Makefile run `podman build -t localhost/autophage-sandbox:latest -f deploy/Containerfile ..`. When jess is published and the replace is dropped, remove the `COPY jess` line and build with context `.`.
+The toolbox stage copies `../jess` because of the `replace` directive; podman's build context must therefore be `~/projects` (the deploy host uses the same layout) with `-f autophage/deploy/Containerfile`. Adjust the `COPY` lines to `COPY autophage/go.mod autophage/go.sum ./`, `COPY jess /jess`, `COPY autophage/ .` and `COPY autophage/deploy/warm-deps ...` accordingly, and in the Makefile run `podman build -t localhost/autophage-sandbox:latest -f deploy/Containerfile ..`. When jess is published and the replace is dropped, remove the `COPY jess` line and build with context `.`.
 
 `deploy/warm-deps`:
 
@@ -425,16 +425,16 @@ image-test: ## Prove the sandbox image
 	deploy/image_test.sh $(IMAGE)
 ```
 
-- [ ] **Step 3: Commit (the build is verified on trig in Step 4)**
+- [ ] **Step 3: Commit (the build is verified on the deploy host in Step 4)**
 
 ```bash
 chmod +x deploy/warm-deps deploy/image_test.sh && make check && git add deploy/Containerfile deploy/warm-deps deploy/image_test.sh Makefile && git commit -m "image: sandbox image with toolchains, toolbox and the dependency warmer"
 ```
 
-- [ ] **Step 4: Build and prove the image on trig**
+- [ ] **Step 4: Build and prove the image on the deploy host**
 
-trig is a deploy target: code flows through git, never edited there. Until autophage and jess are pushed, verify by syncing a throwaway copy: `rsync -a --exclude .git --exclude .superpowers /Users/guygrigsby/projects/autophage/ trig:/tmp/autophage-image/autophage/ && rsync -a --exclude .git /Users/guygrigsby/projects/jess/ trig:/tmp/autophage-image/jess/` then `ssh trig 'cd /tmp/autophage-image/autophage && podman build -t localhost/autophage-sandbox:latest -f deploy/Containerfile .. 2>&1 | tail -5 && deploy/image_test.sh'`.
-Expected: the build succeeds and the test prints `✓ image ok`. Record the exact output in the report. Delete `/tmp/autophage-image` on trig afterwards. If the build fails on a package name, fix the Containerfile here, commit, and re-sync; never edit on trig.
+The deploy host is a deploy target: code flows through git, never edited there. Until autophage and jess are pushed, verify by syncing a throwaway copy: `rsync -a --exclude .git --exclude .superpowers ~/projects/autophage/ <host>:/tmp/autophage-image/autophage/ && rsync -a --exclude .git ~/projects/jess/ <host>:/tmp/autophage-image/jess/` then `ssh <host> 'cd /tmp/autophage-image/autophage && podman build -t localhost/autophage-sandbox:latest -f deploy/Containerfile .. 2>&1 | tail -5 && deploy/image_test.sh'`.
+Expected: the build succeeds and the test prints `✓ image ok`. Record the exact output in the report. Delete `/tmp/autophage-image` on the deploy host afterwards. If the build fails on a package name, fix the Containerfile here, commit, and re-sync; never edit on the deploy host.
 
 ---
 
@@ -690,7 +690,7 @@ func realPodman(t *testing.T) *Manager {
 	t.Helper()
 	bin, err := exec.LookPath("podman")
 	if err != nil {
-		t.Skip("podman not on PATH; sandbox container tests run on trig")
+		t.Skip("podman not on PATH; sandbox container tests run on the deploy host")
 	}
 	image := "localhost/autophage-sandbox:latest"
 	if err := exec.Command(bin, "image", "exists", image).Run(); err != nil {
@@ -1069,9 +1069,9 @@ Note on `git clean -fdx` in `checkout`: it runs before the branch is (re)checked
 Run: `go test ./internal/sandbox/ -v 2>&1 | tail -20`
 Expected: the three git tests PASS; `TestContainerLifecycleToolsAndDiff` SKIPs with the podman message.
 
-- [ ] **Step 6: Run the container test on trig**
+- [ ] **Step 6: Run the container test on the deploy host**
 
-Sync as in Task 2 Step 4, then `ssh trig 'cd /tmp/autophage-image/autophage && go test ./internal/sandbox/ -run TestContainerLifecycleToolsAndDiff -v 2>&1 | tail -20'`. Expected: PASS, with `NONET` in the bash output proving no network. Record the output in the report. If `--userns=keep-id` and `:Z` labels misbehave on trig (Fedora, SELinux), adjust the flags here, commit, re-sync.
+Sync as in Task 2 Step 4, then `ssh <host> 'cd /tmp/autophage-image/autophage && go test ./internal/sandbox/ -run TestContainerLifecycleToolsAndDiff -v 2>&1 | tail -20'`. Expected: PASS, with `NONET` in the bash output proving no network. Record the output in the report. If `--userns=keep-id` and `:Z` labels misbehave on the deploy host (Fedora, SELinux), adjust the flags here, commit, re-sync.
 
 - [ ] **Step 7: Update the contracts document and commit**
 

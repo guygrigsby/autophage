@@ -137,7 +137,7 @@ dev: ## Run autophaged watcher + Vite together (both hot-reload)
 # module's go.mod whether or not the toolbox imports it; drop them here and
 # from the Containerfile once both are published. A git checkout is staged
 # with `git archive HEAD`, so only committed files reach the image. A copy
-# that is not a checkout (the sync to trig excludes .git) falls back to rsync
+# that is not a checkout (the sync to the deploy host excludes .git) falls back to rsync
 # minus .git and the built binaries.
 image: ## Build the sandbox image from a staged context (this repo + the jess and llm siblings)
 	@set -euo pipefail; \

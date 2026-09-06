@@ -4,7 +4,7 @@ Date: 2026-09-04. Companions: [context map](2026-09-04-autophage-context-map.md)
 
 ## What it is
 
-A daemon on trig that watches issues on enrolled GitHub repositories through a GitHub App. For each new issue it decides whether it may act (trust gate), how big the work is (triage), and runs a jess coding agent in a podman sandbox under a budget. The output is a branch and a pull request, or a comment with findings and a request for approval. Approval is the `approved` label on the issue.
+A daemon on a Linux host that watches issues on enrolled GitHub repositories through a GitHub App. For each new issue it decides whether it may act (trust gate), how big the work is (triage), and runs a jess coding agent in a podman sandbox under a budget. The output is a branch and a pull request, or a comment with findings and a request for approval. Approval is the `approved` label on the issue.
 
 ## Flow
 
@@ -49,7 +49,7 @@ Container: rootless podman, non-root user, `--cap-drop=all`, `--security-opt=no-
 
 Prep container: same image, network allowed, runs the lockfile-driven fetch for each toolchain detected (`go.mod`: `go mod download`; `package-lock.json` or `pnpm-lock.yaml`: `npm ci` or `pnpm install --frozen-lockfile`; `uv.lock`: `uv sync --frozen`). Cache volumes are named per repository.
 
-Image: one `autophage-sandbox` image with Go, Node, Python with uv, git, make and the toolbox binary. Built on trig by `make image`. Toolchain versions are open.
+Image: one `autophage-sandbox` image with Go, Node, Python with uv, git, make and the toolbox binary. Built on the deploy host by `make image`. Toolchain versions are open.
 
 Residual: the model provider sees the repository (any provider for any repository, decided). The agent can write anything it read into the PR, bounded to repository content. Posted comments have `@mentions` neutralised.
 
@@ -61,17 +61,17 @@ Inbound: store the delivery (delivery id unique, raw payload as BYTEA, event and
 
 Outbound port in Resolution's types: `MintToken(repository)` (App JWT to an installation token scoped to that single repository, one hour), `PostComment`, `OpenPullRequest`, `EnsureLabel(repository, "approved")` on enrollment. Push is `git push` on the host with the token as a per-command header; nothing lands in `.git/config`. Every call honors `Retry-After` and secondary rate limits with backoff. A failed post is retried, never dropped, and never aborts the attempt that produced it.
 
-Ingress: Tailscale Funnel on trig exposes `POST /webhook/github`. The tailnet ACL must permit Funnel for trig; verifying that is the first deployment task.
+Ingress: Tailscale Funnel on the deploy host exposes `POST /webhook/github`. The tailnet ACL must permit Funnel for the deploy host; verifying that is the first deployment task.
 
 ## Models
 
-OpenRouter for every tier. The `llm` module gains an `openrouter` adapter (chat completions wire format, OpenRouter headers, reasoning passthrough), contributed upstream. Config names one OpenRouter model id per tier: `[model.triage]`, `[model.auto]`, `[model.approved]`. The key is `OPENROUTER_API_KEY` from the op cache. Any provider for any repository, public or private.
+OpenRouter for every tier. The `llm` module gains an `openrouter` adapter (chat completions wire format, OpenRouter headers, reasoning passthrough), contributed upstream. Config names one OpenRouter model id per tier: `[model.triage]`, `[model.auto]`, `[model.approved]`. The key is `OPENROUTER_API_KEY` from your secret store. Any provider for any repository, public or private.
 
 ## Process
 
-`autophaged` on trig under systemd `--user` with linger, scaffolded from rookery `--no-web` plus a systemd unit template. Inside: the webhook handler, a dispatcher woken by Postgres `LISTEN/NOTIFY` on new deliveries and case transitions, and a bounded worker pool. No polling loop.
+`autophaged` on the deploy host under systemd `--user` with linger, scaffolded from rookery `--no-web` plus a systemd unit template. Inside: the webhook handler, a dispatcher woken by Postgres `LISTEN/NOTIFY` on new deliveries and case transitions, and a bounded worker pool. No polling loop.
 
-Daemon restart: on boot every attempt without an outcome is recorded `Aborted{DaemonRestart}`; the case re-queues once, then fails. Postgres runs natively on trig; one database holds autophage's tables and jess's ledger tables so `autophage why` joins on run id. Prometheus metrics on the daemon's listen address for bee's Prometheus to scrape over the tailnet: cases by state, attempts by outcome, tokens, wall clock, queue depth. Logs to the journal.
+Daemon restart: on boot every attempt without an outcome is recorded `Aborted{DaemonRestart}`; the case re-queues once, then fails. Postgres runs natively on the deploy host; one database holds autophage's tables and jess's ledger tables so `autophage why` joins on run id. Prometheus metrics on the daemon's listen address for bee's Prometheus to scrape over the tailnet: cases by state, attempts by outcome, tokens, wall clock, queue depth. Logs to the journal.
 
 Errors are handled where recovery exists: GitHub API errors back off and retry in place; podman and git failures end the attempt `Failed{Infra}` with the branch pushed if anything was committed; model errors go through jess's retries then `Failed{Model}`; the agent declaring it cannot is `Failed{Agent}`. Nothing propagates to main.
 

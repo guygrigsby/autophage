@@ -15,7 +15,7 @@ func realPodman(t *testing.T) *Manager {
 	t.Helper()
 	bin, err := exec.LookPath("podman")
 	if err != nil {
-		t.Skip("podman not on PATH; sandbox container tests run on trig")
+		t.Skip("podman not on PATH; sandbox container tests run on the deploy host")
 	}
 	image := "localhost/autophage-sandbox:latest"
 	if err := exec.Command(bin, "image", "exists", image).Run(); err != nil {

@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Repo `/Users/guygrigsby/projects/autophage`, module `github.com/guygrigsby/autophage`, Go 1.26, commits straight to `main`.
+- Repo `~/projects/autophage`, module `github.com/guygrigsby/autophage`, Go 1.26, commits straight to `main`.
 - Domain package `internal/resolution` imports nothing outside the standard library. Vendor SDKs are confined: only `internal/github` imports go-github and ghinstallation; only `internal/store` imports pgx and goose; only `internal/agent` (Plan E) imports jess, agentcore and llm, except `internal/api/why.go` which reads the jess ledger through `jess/ledger` only.
 - Every invariant in the domain model is enforced in a constructor or a method; every state transition not in the table is refused with `ErrRefused`.
 - DDL is the contracts document's, verbatim, in `internal/store/migrations/0001_init.sql`. No JSON columns. No nullable columns.
@@ -6545,7 +6545,7 @@ StandardError=journal
 WantedBy=default.target
 ```
 
-`~/.config/autophage/env` holds `AUTOPHAGE_GITHUB_WEBHOOK_SECRET=...` and `OPENROUTER_API_KEY=...` (mode 0600, written by the operator from the op cache; never committed).
+`~/.config/autophage/env` holds `AUTOPHAGE_GITHUB_WEBHOOK_SECRET=...` and `OPENROUTER_API_KEY=...` (mode 0600, written by the operator from your secret store; never committed).
 
 Makefile additions (keep the launchd targets):
 
@@ -6569,7 +6569,7 @@ and make `redeploy` pick the platform: `redeploy: ## Stop, reinstall, start (lau
 
 `config.example.toml`: replace with every section from the design spec's Config, values from `config.Default()` and the three model ids left as `"moonshotai/kimi-k2.7-code"` (triage) and `"moonshotai/kimi-k3"` (auto, approved) as starting points.
 
-README.md: replace the scaffold text with what autophage is (two paragraphs from the design spec's "What it is" and "Flow"), install on trig (`make install-systemd`, the env file, Postgres native, Funnel one-liner `tailscale funnel --bg --set-path /webhook/github http://127.0.0.1:8080/webhook/github`), the CLI verbs, and links to the specs and ADRs.
+README.md: replace the scaffold text with what autophage is (two paragraphs from the design spec's "What it is" and "Flow"), install on the deploy host (`make install-systemd`, the env file, Postgres native, Funnel one-liner `tailscale funnel --bg --set-path /webhook/github http://127.0.0.1:8080/webhook/github`), the CLI verbs, and links to the specs and ADRs.
 
 - [ ] **Step 6: Gate, build both binaries, exercise the CLI against a live daemon**
 

@@ -77,6 +77,6 @@ Repository means the same thing on both sides. No split.
 - A Closed case whose issue is reopened: v1 does nothing.
 - Whether Gated cases get any comment: v1 is silent.
 - Base image toolchain versions and which registries the prep container may reach.
-- Tailnet ACL permits Funnel on trig: unverified.
+- Tailnet ACL permits Funnel on <host>: unverified.
 - Default concurrency (2).
 - Re-enrollment deletes the Removal row rather than appending a second enrollment fact.

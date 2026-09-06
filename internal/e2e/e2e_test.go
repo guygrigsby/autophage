@@ -65,7 +65,7 @@ func podmanOrSkip(t *testing.T) (bin, image string) {
 	t.Helper()
 	bin, err := exec.LookPath("podman")
 	if err != nil {
-		t.Skip("podman not on PATH; the end to end test runs on trig")
+		t.Skip("podman not on PATH; the end to end test runs on the deploy host")
 	}
 	image = os.Getenv("AUTOPHAGE_E2E_IMAGE")
 	if image == "" {
