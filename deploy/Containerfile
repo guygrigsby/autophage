@@ -71,7 +71,7 @@ RUN corepack enable \
     && chmod -R a+rX /opt/corepack
 
 COPY --from=toolbox /out/autophage-toolbox /usr/local/bin/autophage-toolbox
-COPY autophage/deploy/warm-deps /usr/local/bin/warm-deps
+COPY deploy/warm-deps /usr/local/bin/warm-deps
 RUN chmod 0755 /usr/local/bin/warm-deps /usr/local/bin/autophage-toolbox \
     && useradd --uid 1000 --create-home --shell /bin/bash agent \
     && mkdir -p /work /cache/go/mod /cache/go/build /cache/npm /cache/npm/pnpm-store \
