@@ -2,20 +2,14 @@
 # this image. No secrets, no network in the agent phase. Built on the deploy host by
 # `make image`.
 #
-# Build context is the parent of this checkout (see the Makefile's `image`
-# target): `github.com/guygrigsby/jess` and `github.com/guygrigsby/llm` are
-# pulled in via go.mod `replace` directives and are not part of this repo, so
-# both have to be sibling directories in the context. `go mod download` reads
-# every replaced module's go.mod whether or not the toolbox imports it. Once
-# they are published and the replaces are dropped, drop the two COPY lines
-# below and build with context `.` instead.
+# Build context is this checkout, staged by the Makefile's `image` target so
+# only committed files reach the image. The toolbox stage downloads its
+# modules from the proxy; nothing outside the repo is copied in.
 FROM docker.io/library/golang:1.26-bookworm AS toolbox
 WORKDIR /src
-COPY autophage/go.mod autophage/go.sum ./
-COPY jess /jess
-COPY llm /llm
+COPY go.mod go.sum ./
 RUN go mod download
-COPY autophage/ .
+COPY . .
 RUN CGO_ENABLED=0 go build -o /out/autophage-toolbox ./cmd/autophage-toolbox
 
 FROM docker.io/library/debian:bookworm-slim

@@ -22,7 +22,7 @@ make build
 
 ## Building
 
-`go.mod` carries a `replace github.com/guygrigsby/jess => ../jess` directive: the sandbox plan needs `jess/mcp`, which exists only at the sibling checkout until jess is tagged. A later change adds the same for `github.com/guygrigsby/llm` once the OpenRouter adapter lands there. Building this repo means the `jess` checkout (and later `llm`) must exist as a sibling directory of `autophage/` on disk. [The trig runbook's step 1](docs/runbooks/deploy.md#1-release-prerequisites-operator) drops both replace directives once real tags exist upstream.
+`go.mod` pins `github.com/guygrigsby/jess` (v0.1.0, the MCP adapter and ledger) and `github.com/guygrigsby/llm` (v0.4.0, the OpenRouter adapter) to published tags, so a plain `make build` works from a clone with no sibling checkouts. Bumping either is a `go get` plus `go mod tidy`; the release steps for a new tag are in the runbook's step 1.
 
 ## CLI
 
