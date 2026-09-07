@@ -127,6 +127,11 @@ Edit `~/.config/autophage/config.toml` on <host>:
 
 ## 7. Funnel (ssh)
 
+The port in every proxy target below is the daemon's `listen` port from
+`config.toml`. The example config says 8080; change both if something else
+on the host already holds it (this runbook was first run on a host where it
+did).
+
 ```bash
 ssh <host> tailscale funnel --bg --set-path /webhook/github http://127.0.0.1:8080/webhook/github
 ```
@@ -147,6 +152,44 @@ Expect `401` (`unauthenticated`): Funnel reached the daemon and the daemon
 rejected the unsigned JSON request. A bare POST without the JSON content type
 gets `400` instead, which also proves the daemon answered. Anything else means
 Funnel or the daemon is not up yet.
+
+### A dedicated hostname (ssh, then operator)
+
+Funnel serves under the node's own name. To give the webhook its own name
+(`https://autophage.<tailnet>.ts.net`) without renaming the host, run a second
+`tailscaled` in userspace mode as the `autophage` node. It needs no TUN
+device and no root; it forwards to the daemon on loopback like the host's own
+node would.
+
+```bash
+ssh <host> 'mkdir -p ~/.config/systemd/user ~/.local/state/ts-autophage'
+ssh <host> 'cat > ~/.config/systemd/user/ts-autophage.service' <<'UNIT'
+[Unit]
+Description=tailscaled (userspace) for the autophage ingress node
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/tailscaled --tun=userspace-networking --socket=%t/ts-autophage.sock --statedir=%h/.local/state/ts-autophage --port=0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+UNIT
+ssh <host> 'systemctl --user daemon-reload && systemctl --user enable --now ts-autophage.service'
+ssh <host> 'tailscale --socket=/run/user/$(id -u)/ts-autophage.sock up --hostname=autophage --accept-dns=false --accept-routes=false'
+```
+
+`up` prints a login link (**operator**, browser). Once the node shows in the
+admin console, set the Funnel path on that instance, which prints the
+Funnel enable link for the new node (**operator** again):
+
+```bash
+ssh <host> 'tailscale --socket=/run/user/$(id -u)/ts-autophage.sock funnel --bg --set-path /webhook/github http://127.0.0.1:8080/webhook/github'
+```
+
+Verify as above against `https://autophage.<tailnet>.ts.net/webhook/github`.
+The App's webhook URL uses that name.
 
 ## 8. Service (ssh)
 
@@ -175,7 +218,7 @@ ssh <host> 'cd ~/projects/autophage && ./autophage auth login'
 ```
 
 The mint endpoint only accepts loopback requests, so login has to run from a
-shell on the deploy host itself, over this ssh session, not from your workstation's CLI and
+shell on the deploy host itself, over this ssh session, not from your workstation's CLI (the CLI reads the daemon's `listen` port from the same config file) and
 not through Funnel.
 
 ```bash
@@ -195,13 +238,13 @@ Prints the jess ledger chain for that attempt.
 ## 10. Metrics (ssh, then operator on the Prometheus host)
 
 ```bash
-ssh <host> tailscale serve --bg --set-path /metrics http://127.0.0.1:8080/metrics
+ssh <host> tailscale serve --bg --set-path /metrics http://127.0.0.1:8080/metrics   # the listen port
 ```
 
 Tailnet only, never through Funnel. Add `https://<host>.<tailnet>.ts.net/metrics` as
 a scrape target in the Prometheus host's scrape config (**operator**). The
 daemon itself listens on loopback only; `tailscale serve` is what publishes
-it, on 443, so port 8080 is not reachable from the Prometheus host.
+it, on 443, so the daemon's port is not reachable from the Prometheus host.
 
 ## Rollback
 
