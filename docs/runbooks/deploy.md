@@ -212,16 +212,13 @@ ssh <host> 'cd ~/projects/autophage && ./autophage why <attempt-id>'
 
 Prints the jess ledger chain for that attempt.
 
-## 10. Metrics (ssh, then operator on the Prometheus host)
+## 10. Metrics (operator on the Prometheus host)
 
-```bash
-ssh <host> tailscale serve --bg --set-path /metrics http://127.0.0.1:8080/metrics   # the listen port
-```
-
-Tailnet only, never through Funnel. Add `https://<host>.<tailnet>.ts.net/metrics` as
+`/metrics` is served by the tailnet service name, never from the node's
+Funnel port (see step 7). Add `https://autophage.<tailnet>.ts.net/metrics` as
 a scrape target in the Prometheus host's scrape config (**operator**). The
-daemon itself listens on loopback only; `tailscale serve` is what publishes
-it, on 443, so the daemon's port is not reachable from the Prometheus host.
+service terminates TLS with a ts.net certificate on 443, so the daemon's
+own port is never reachable from the Prometheus host.
 
 ## Rollback
 
