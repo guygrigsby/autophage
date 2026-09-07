@@ -90,10 +90,9 @@ func (t *Triage) one(ctx context.Context, k store.CaseKey) error {
 	start := time.Now()
 	tr, cerr := t.Triager.Classify(ctx, detail.Title, detail.Body)
 	elapsed := time.Since(start)
-	switch {
-	case cerr == nil:
+	if cerr == nil {
 		t.metrics().Triage(string(tr.Size), resultOK, elapsed)
-	default:
+	} else {
 		count, next := t.fail(k)
 		if count < triageGiveUp {
 			t.metrics().Triage(sizeNone, resultError, elapsed)

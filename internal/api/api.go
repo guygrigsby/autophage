@@ -99,7 +99,7 @@ func New(dir string, static fs.FS, d Deps) http.Handler {
 		mux.Handle("GET /api/attempts/{id}", auth.Middleware(dir, http.HandlerFunc(h.getAttempt)))
 		mux.Handle("POST /api/attempts/{id}/stop", auth.Middleware(dir, http.HandlerFunc(h.stop)))
 		mux.Handle("GET /api/attempts/{id}/why", auth.Middleware(dir, http.HandlerFunc(h.why)))
-		mux.Handle("GET /metrics", metricsHandler(d.Store))
+		mux.Handle("GET /metrics", metricsHandler(d.Store, d.Version, d.StartedAt))
 	}
 
 	// Serve the SPA at / only when a real build is embedded.

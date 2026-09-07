@@ -66,7 +66,7 @@ func main() {
 		Installations: func(ctx context.Context, repo string) (int64, error) {
 			r, err := st.GetRepository(ctx, repo)
 			return r.InstallationID, err
-		}})
+		}, Metrics: api.RequestMetrics{}})
 	if err != nil {
 		log.Fatalf("github: %v", err)
 	}
@@ -82,7 +82,7 @@ func main() {
 		GitHub: gh,
 		Sandbox: &sandbox.Manager{Image: cfg.Sandbox.Image, WorkspacesDir: expandHome(cfg.Sandbox.WorkspacesDir), Memory: "4g", CPUs: "4", Pids: 512,
 			BotName: cfg.GitHub.BotLogin, BotEmail: strings.TrimSuffix(cfg.GitHub.BotLogin, "[bot]") + "[bot]@users.noreply.github.com", Logf: log.Printf},
-		Models:        agent.Models{Key: secrets.OpenRouterKey, Title: "autophage"},
+		Models:        agent.Models{Key: secrets.OpenRouterKey, Title: "autophage", Metrics: api.ModelMetrics{}},
 		AttemptModel:  cfg.Model.Auto.Model,
 		ApprovedModel: cfg.Model.Approved.Model,
 		TriageModel:   cfg.Model.Triage.Model,
@@ -94,13 +94,14 @@ func main() {
 	scheduler := &app.Scheduler{Store: st, Runner: runner, Concurrency: cfg.Sandbox.Concurrency, Clock: clock, Budgets: app.BudgetPolicy{Auto: autoBudget, Approved: approvedBudget}, GitHub: gh}
 	dispatcher := &app.Dispatcher{
 		Store:      st,
-		Translator: &github.Translator{Store: st, Clock: clock, ApprovedLabel: cfg.Label.Approved, BotLogin: cfg.GitHub.BotLogin},
-		Triage:     &app.Triage{Store: st, Triager: runner.Triager(), GitHub: gh, Clock: clock, Model: cfg.Model.Triage.Model},
+		Translator: &github.Translator{Store: st, Clock: clock, ApprovedLabel: cfg.Label.Approved, BotLogin: cfg.GitHub.BotLogin, Metrics: api.TranslateMetrics{}},
+		Triage:     &app.Triage{Store: st, Triager: runner.Triager(), GitHub: gh, Clock: clock, Model: cfg.Model.Triage.Model, Metrics: api.TriageMetrics{}},
 		Scheduler:  scheduler,
-		Commenter:  &app.Commenter{Store: st, GitHub: gh, Label: cfg.Label.Approved},
+		Commenter:  &app.Commenter{Store: st, GitHub: gh, Label: cfg.Label.Approved, Metrics: api.CommentMetrics{}},
 		Enrollment: &app.Enrollment{Store: st, GitHub: gh, Label: cfg.Label.Approved, Clock: clock},
 		Recovery:   &app.Recovery{Store: st, Clock: clock},
 		Canceller:  runner,
+		Metrics:    api.SweepMetrics{},
 	}
 
 	handler := api.New(dir, rootapp.Static(), api.Deps{
