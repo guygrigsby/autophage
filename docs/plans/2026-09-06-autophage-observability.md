@@ -42,7 +42,7 @@ New:
 | `autophage_model_tokens_total` | counter | model, direction | llm.Meter, `direction` in `prompt|completion|reasoning|cache_read|cache_write` |
 | `autophage_model_cost_usd_total` | counter | model | llm.Meter, from `Usage.Cost` |
 | `autophage_attempts_running` | gauge | | runner, register and unregister |
-| `autophage_attempt_step_seconds` | histogram, 0.1s to 1h | step | runner, `step` in `mint|prepare|start|tools|run|remint|push|conflicts|pull_request|teardown` |
+| `autophage_attempt_step_seconds` | histogram, 0.1s to 4h | step | runner, `step` in `mint|prepare|start|tools|run|remint|push|conflicts|pull_request|teardown` |
 | `autophage_attempt_step_errors_total` | counter | step | runner, when a step fails |
 | `autophage_attempt_tool_calls_total` | counter | tool, result | budgetTool, `result` in `ok|error` |
 | `autophage_attempt_tool_seconds` | histogram, 0.05s to 600s | tool | budgetTool |
