@@ -25,6 +25,9 @@ type ClientConfig struct {
 	BaseURL       string
 	UserAgent     string
 	Installations func(ctx context.Context, repository string) (int64, error)
+	// Metrics reports every request the retry transport makes. Nil is
+	// NopRequestMetrics.
+	Metrics RequestMetrics
 }
 
 // Client implements resolution.GitHub over the GitHub App. One installation
@@ -53,7 +56,11 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	// ghinstallation turns a non-2xx token response into a Go error only
 	// after the transport returns it, so the retry must happen in here,
 	// before that conversion.
-	base := &retryTransport{next: http.DefaultTransport, userAgent: cfg.UserAgent}
+	metrics := cfg.Metrics
+	if metrics == nil {
+		metrics = NopRequestMetrics{}
+	}
+	base := &retryTransport{next: http.DefaultTransport, userAgent: cfg.UserAgent, metrics: metrics}
 	apps, err := ghinstallation.NewAppsTransport(base, cfg.AppID, cfg.PrivateKeyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("github: app transport: %w", err)
@@ -249,6 +256,17 @@ const baseBackoff = time.Second
 type retryTransport struct {
 	next      http.RoundTripper
 	userAgent string
+	// metrics is never nil in a client NewClient built; a transport a test
+	// builds by hand may leave it so, which meters returns for.
+	metrics RequestMetrics
+}
+
+// meter tolerates a transport built without metrics.
+func (t *retryTransport) meter() RequestMetrics {
+	if t.metrics == nil {
+		return NopRequestMetrics{}
+	}
+	return t.metrics
 }
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -270,9 +288,17 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			}
 			req.Body = body
 		}
+		start := time.Now()
 		resp, err := t.next.RoundTrip(req)
+		elapsed := time.Since(start)
+		method := req.Method
 		if err != nil {
+			t.meter().Request(method, statusError, elapsed)
 			return nil, err
+		}
+		t.meter().Request(method, strconv.Itoa(resp.StatusCode), elapsed)
+		if v, cerr := strconv.Atoi(resp.Header.Get("X-RateLimit-Remaining")); cerr == nil {
+			t.meter().RateLimitRemaining(v)
 		}
 		if (resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusTooManyRequests) || attempt == 2 {
 			return resp, nil
@@ -284,13 +310,8 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if resp.StatusCode == http.StatusForbidden && !throttled(resp) {
 			return resp, nil
 		}
-		wait := retryAfter(resp.Header.Get("Retry-After"))
-		if wait <= 0 {
-			wait = rateLimitReset(resp.Header.Get("X-RateLimit-Reset"), time.Now())
-		}
-		if wait <= 0 {
-			wait = baseBackoff << attempt
-		}
+		wait, reason := retryWait(resp, time.Now(), attempt)
+		t.meter().Retry(reason)
 		_ = resp.Body.Close()
 		select {
 		case <-req.Context().Done():
@@ -299,6 +320,20 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 	return nil, errors.New("unreachable")
+}
+
+// retryWait says how long to wait before retrying a throttled response and
+// which header decided it. Retry-After first, then the primary limit's
+// reset, then the exponential backoff that covers the secondary limits,
+// which answer with neither header.
+func retryWait(resp *http.Response, now time.Time, attempt int) (time.Duration, string) {
+	if wait := retryAfter(resp.Header.Get("Retry-After")); wait > 0 {
+		return wait, reasonRetryAfter
+	}
+	if wait := rateLimitReset(resp.Header.Get("X-RateLimit-Reset"), now); wait > 0 {
+		return wait, reasonRateLimit
+	}
+	return baseBackoff << attempt, reasonBackoff
 }
 
 // throttled reports whether a 403 is a rate limit rather than a refusal:

@@ -19,6 +19,16 @@ type Translator struct {
 	Clock         resolution.Clock
 	ApprovedLabel string
 	BotLogin      string
+	// Metrics counts each processing row. Nil is NopTranslateMetrics.
+	Metrics TranslateMetrics
+}
+
+// metrics tolerates an unwired Metrics.
+func (t *Translator) metrics() TranslateMetrics {
+	if t.Metrics == nil {
+		return NopTranslateMetrics{}
+	}
+	return t.Metrics
 }
 
 // ProcessPending processes every delivery without a processing row, oldest
@@ -45,7 +55,14 @@ func (t *Translator) Process(ctx context.Context, d store.Delivery) error {
 	if result == "" {
 		return errors.New(detail)
 	}
-	return t.Store.RecordProcessing(ctx, d.ID, result, detail)
+	if err := t.Store.RecordProcessing(ctx, d.ID, result, detail); err != nil {
+		return err
+	}
+	// Counted after the row lands, so the metric matches the table: a
+	// delivery whose row failed to write is retried on the next scan and
+	// counted then.
+	t.metrics().Delivery(d.Event, result)
+	return nil
 }
 
 func (t *Translator) translate(ctx context.Context, d store.Delivery) (result, detail string) {
