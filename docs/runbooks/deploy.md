@@ -97,6 +97,12 @@ ssh <host> chmod 0600 ~/.config/autophage/app.pem
 
 Note the App id and the bot login (`autophage[bot]`) for step 6.
 
+**Verify:** the App's "Permissions & events" page must list Issues under
+subscribed events, or GitHub never delivers an issue (the installation
+delivery still succeeds, which makes the gap easy to miss). Before opening the
+first issue, the App's recent deliveries page should show `installation`
+with 202 and nothing failed.
+
 ## 5. Secrets (ssh)
 
 Write `~/.config/autophage/env` on the deploy host, mode 0600, values from your secret store.
