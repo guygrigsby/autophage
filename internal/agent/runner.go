@@ -41,12 +41,6 @@ const (
 // other way an attempt ends produces an outcome.
 var errShutdown = errors.New("the daemon is shutting down")
 
-// Metrics is what the runner reports; the api package's Prometheus vectors
-// implement it in the daemon.
-type Metrics interface {
-	Ended(kind, outcome string, usage resolution.Usage)
-}
-
 // Runner takes a started attempt from token to outcome. It implements
 // resolution.Runner and owns the running attempts, so the operator can stop
 // one and a closed issue can cancel one.
@@ -78,6 +72,15 @@ type Runner struct {
 	running map[string]*running
 }
 
+// metrics tolerates an unwired Metrics, so a Runner a test builds reports to
+// nothing rather than panicking.
+func (r *Runner) metrics() Metrics {
+	if r.Metrics == nil {
+		return NopMetrics{}
+	}
+	return r.Metrics
+}
+
 // tier returns ModelOverride when a test set one, and the built tier
 // otherwise.
 func (r *Runner) tier(modelID string) (ac.ChatModel, error) {
@@ -106,7 +109,7 @@ func (r *Runner) Triager() resolution.Triager {
 	if err != nil {
 		return brokenTriager{err}
 	}
-	return &Triager{Model: m, ModelID: r.TriageModel}
+	return &Triager{Model: m, ModelID: r.TriageModel, Metrics: r.Models.metrics()}
 }
 
 // brokenTriager reports the model it could not build. app.Triage logs the
@@ -165,6 +168,7 @@ func (r *Runner) register(attemptID string, cancel context.CancelFunc) *running 
 	}
 	slot := &running{cancel: cancel}
 	r.running[attemptID] = slot
+	r.metrics().Running(1)
 	return slot
 }
 
@@ -176,6 +180,10 @@ func (r *Runner) unregister(attemptID string, slot *running) {
 	defer r.mu.Unlock()
 	if r.running[attemptID] == slot {
 		delete(r.running, attemptID)
+		// Inside the lock and only on the delete that actually removed
+		// this run: unregister is called twice on the ordinary path, and a
+		// gauge moved by the second call would drift below zero.
+		r.metrics().Running(-1)
 	}
 }
 
@@ -228,7 +236,7 @@ func (r *Runner) Run(ctx context.Context, attemptID string) {
 		return
 	}
 
-	outcome, err := r.execute(runCtx, ctx, c, *a, slot)
+	outcome, stop, err := r.execute(runCtx, ctx, c, *a, slot)
 	// Out of flight before the outcome is written: the attempt is over, so
 	// a stop arriving now must say so rather than cancel a context nothing
 	// is listening to any more.
@@ -248,9 +256,7 @@ func (r *Runner) Run(ctx context.Context, attemptID string) {
 	// Reported whether or not the row landed: the turns and the tokens were
 	// spent either way, and a metric that hides the failed writes is the
 	// wrong shape of missing.
-	if r.Metrics != nil {
-		r.Metrics.Ended(string(a.Kind), string(outcome.Kind), outcome.Usage)
-	}
+	r.metrics().Ended(string(a.Kind), string(outcome.Kind), stopLabel(stop), outcome.Usage)
 }
 
 // execute is the pipeline: token, workspace, container, toolbox, the
@@ -258,7 +264,8 @@ func (r *Runner) Run(ctx context.Context, attemptID string) {
 // an outcome. ctx is the attempt's, cancelled by Stop and Cancel; caller is
 // the daemon's, and its cancellation with no recorded reason is the one end
 // that returns errShutdown and no outcome at all.
-func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a resolution.Attempt, slot *running) (resolution.Outcome, error) {
+func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a resolution.Attempt, slot *running) (resolution.Outcome, Stop, error) {
+	m := r.metrics()
 	failed := func(class resolution.FailureClass, message string, u resolution.Usage) resolution.Outcome {
 		o, cerr := resolution.OutcomeFailed(class, message, u, r.now())
 		return r.settled(o, cerr, u)
@@ -290,25 +297,27 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	// preference to the context's own error, so almost nothing the sandbox
 	// returns for a cancelled step unwraps to context.Canceled. The error
 	// text is kept as detail either way.
-	setup := func(step string, err error) (resolution.Outcome, error) {
+	// Every setup failure is StopNone: the run never began, so there is no
+	// stop reason to report for it.
+	setup := func(step string, err error) (resolution.Outcome, Stop, error) {
 		if ctx.Err() != nil {
 			if reason := r.reason(slot, ""); reason != "" {
 				o, cerr := resolution.OutcomeAborted(reason, "The attempt was stopped during "+step+", before the agent ran: "+err.Error(), resolution.Usage{}, r.now())
-				return r.settled(o, cerr, resolution.Usage{}), nil
+				return r.settled(o, cerr, resolution.Usage{}), StopNone, nil
 			}
 			if caller.Err() != nil {
 				r.logf("runner %s: %s: %v", a.ID, step, err)
-				return resolution.Outcome{}, errShutdown
+				return resolution.Outcome{}, StopNone, errShutdown
 			}
 		}
-		return infra(step, err, "", resolution.Usage{}), nil
+		return infra(step, err, "", resolution.Usage{}), StopNone, nil
 	}
 
 	repo, err := r.Store.GetRepository(ctx, c.Repository())
 	if err != nil {
 		return setup("repository", err)
 	}
-	token, err := r.GitHub.MintToken(ctx, repo)
+	token, err := timeStep(m, stepMint, func() (resolution.Token, error) { return r.GitHub.MintToken(ctx, repo) })
 	if err != nil {
 		return setup("mint token", err)
 	}
@@ -318,11 +327,13 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	if r.CloneURL != nil {
 		cloneURL = r.CloneURL(repo.FullName)
 	}
-	ws, err := r.Sandbox.Prepare(ctx, repo.FullName, cloneURL, c.Branch(), repo.DefaultBranch, token.Value)
+	ws, err := timeStep(m, stepPrepare, func() (sandbox.Workspace, error) {
+		return r.Sandbox.Prepare(ctx, repo.FullName, cloneURL, c.Branch(), repo.DefaultBranch, token.Value)
+	})
 	if err != nil {
 		return setup("prepare workspace", err)
 	}
-	ctr, err := r.Sandbox.Start(ctx, ws, a.ID)
+	ctr, err := timeStep(m, stepStart, func() (sandbox.Container, error) { return r.Sandbox.Start(ctx, ws, a.ID) })
 	if err != nil {
 		// A failed Start releases the workspace lock itself, so only a
 		// container that exists gets a teardown.
@@ -331,11 +342,16 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	// The Container carries the Workspace Prepare made, including the lock
 	// lease Teardown releases: pass back what Start returned, unchanged.
 	defer func() {
-		if err := r.Sandbox.Teardown(context.WithoutCancel(ctx), ctr); err != nil {
+		start := time.Now()
+		err := r.Sandbox.Teardown(context.WithoutCancel(ctx), ctr)
+		m.Step(stepTeardown, time.Since(start), err)
+		if err != nil {
 			r.logf("runner %s: teardown %s: %v", a.ID, ctr.Name, err)
 		}
 	}()
+	toolsStart := time.Now()
 	tools, closer, err := r.Sandbox.Tools(ctx, ctr)
+	m.Step(stepTools, time.Since(toolsStart), err)
 	if err != nil {
 		return setup("dial toolbox", err)
 	}
@@ -362,8 +378,10 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	// what it did.
 	callerDone := caller.Err() != nil
 
+	runStart := time.Now()
 	report := RunAttempt(ctx, RunInput{
 		Model:   model,
+		ModelID: modelID,
 		Tools:   tools,
 		Ledger:  r.Ledger,
 		Budget:  a.Budget,
@@ -378,7 +396,12 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 		OnRunBegan: func(runID string) {
 			r.recordRun(ctx, c, a.ID, resolution.Run{RunID: runID, Model: modelID, BaseSha: ws.BaseSha, BeganAt: r.now()})
 		},
+		Metrics:      m,
+		ModelMetrics: r.Models.metrics(),
 	})
+	// report.Err is set only for a genuine model failure, so a budget stop
+	// is a step that worked, not one that failed.
+	m.Step(stepRun, time.Since(runStart), report.Err)
 	// StopCancelled with nobody having asked for a stop is the run being cut
 	// short from outside; every other stop is the run ending on its own
 	// terms and keeps its outcome whatever the daemon does next.
@@ -401,21 +424,32 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	// the agent phase on the workspace.
 	pushCtx := context.WithoutCancel(ctx)
 	mintCtx, cancelMint := context.WithTimeout(pushCtx, remintTimeout)
+	remintStart := time.Now()
 	fresh, mintErr := r.GitHub.MintToken(mintCtx, repo)
 	cancelMint()
+	m.Step(stepRemint, time.Since(remintStart), mintErr)
 	pushToken := token
 	if mintErr != nil {
 		r.logf("runner %s: mint push token: %v", a.ID, mintErr)
 	} else {
 		pushToken = fresh
 	}
+	pushStart := time.Now()
 	head, pushed, pushErr := r.Sandbox.CommitAndPush(pushCtx, ws, pushToken.Value, fmt.Sprintf("autophage: attempt %d", a.Ordinal))
+	// A push that reported no error and moved nothing failed just as
+	// surely, so the step reports it as the failure the outcome will call
+	// it below.
+	stepErr := pushErr
+	if stepErr == nil && !pushed {
+		stepErr = errUnpushedBranch
+	}
+	m.Step(stepPush, time.Since(pushStart), stepErr)
 	if pushErr != nil {
 		r.logf("runner %s: commit and push: %v", a.ID, pushErr)
 	}
 
 	if r.shuttingDown(callerDone, slot) {
-		return resolution.Outcome{}, errShutdown
+		return resolution.Outcome{}, report.Stop, errShutdown
 	}
 	// A branch that did not reach the remote is an infrastructure failure
 	// whatever ended the run: the work exists on host disk only, and a
@@ -424,14 +458,11 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	// the likely reason the push was refused. The agent's summary rides
 	// along as detail, since it is the only account of what the attempt did.
 	if pushErr != nil || !pushed {
-		why := pushErr
-		if why == nil {
-			why = errors.New("the branch did not reach the remote")
-		}
+		why := stepErr
 		if mintErr != nil {
 			why = fmt.Errorf("%w (the push token could not be re-minted: %v)", why, mintErr)
 		}
-		return infra("push", why, summary, report.Usage), nil
+		return infra("push", why, summary, report.Usage), report.Stop, nil
 	}
 
 	switch report.Stop {
@@ -446,21 +477,21 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 		if summary != "" {
 			message += "\n\n" + summary
 		}
-		return failed(resolution.FailureModel, message, report.Usage), nil
+		return failed(resolution.FailureModel, message, report.Usage), report.Stop, nil
 	case StopCancelled:
 		o, cerr := resolution.OutcomeAborted(r.reason(slot, resolution.AbortOperatorStop), summary, report.Usage, r.now())
-		return r.settled(o, cerr, report.Usage), nil
+		return r.settled(o, cerr, report.Usage), report.Stop, nil
 	case StopTurns, StopWallClock, StopDiffLines:
 		// The Stop vocabulary and the Limit vocabulary are the same three
 		// words on purpose; keep them equal.
 		o, cerr := resolution.OutcomeExhausted(resolution.Limit(report.Stop), summary, report.Usage, r.now())
-		return r.settled(o, cerr, report.Usage), nil
+		return r.settled(o, cerr, report.Usage), report.Stop, nil
 	}
 	if head == ws.BaseSha {
 		// Nothing was committed. Earlier commits on a resumed attempt's
 		// branch are this attempt's work too, so the comparison is against
 		// the base the branch was rebased onto, not against the remote head.
-		return failed(resolution.FailureAgent, summary, report.Usage), nil
+		return failed(resolution.FailureAgent, summary, report.Usage), report.Stop, nil
 	}
 
 	// The rebase onto the default branch may have left conflict markers in
@@ -473,12 +504,12 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	// operator one pull request they open by hand from a branch that is
 	// already pushed, while a pull request carrying conflict markers is sent
 	// to somebody else's repository.
-	marked, err := r.Sandbox.ConflictMarkers(pushCtx, ws)
+	marked, err := timeStep(m, stepConflicts, func() (bool, error) { return r.Sandbox.ConflictMarkers(pushCtx, ws) })
 	if err != nil {
-		return infra("conflict check", err, summary, report.Usage), nil
+		return infra("conflict check", err, summary, report.Usage), report.Stop, nil
 	}
 	if marked {
-		return failed(resolution.FailureAgent, "left unresolved conflict markers on the branch\n\n"+summary, report.Usage), nil
+		return failed(resolution.FailureAgent, "left unresolved conflict markers on the branch\n\n"+summary, report.Usage), report.Stop, nil
 	}
 
 	ghCtx, cancelGH := context.WithTimeout(pushCtx, githubTimeout)
@@ -490,14 +521,20 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 		title = "autophage: " + truncate(t, 70)
 	}
 	body := fmt.Sprintf("%s\n\nFixes #%d", stripClosingKeywords(summary), c.Number())
-	pr, err := r.GitHub.OpenPullRequest(ghCtx, c.Repository(), c.Branch(), repo.DefaultBranch, title, body)
+	pr, err := timeStep(m, stepPullRequest, func() (int, error) {
+		return r.GitHub.OpenPullRequest(ghCtx, c.Repository(), c.Branch(), repo.DefaultBranch, title, body)
+	})
 	if err != nil {
 		// The branch is pushed, so a retry after approval resumes from it.
-		return infra("open pull request", err, summary, report.Usage), nil
+		return infra("open pull request", err, summary, report.Usage), report.Stop, nil
 	}
 	o, cerr := resolution.OutcomePullRequest(pr, head, summary, report.Usage, r.now())
-	return r.settled(o, cerr, report.Usage), nil
+	return r.settled(o, cerr, report.Usage), report.Stop, nil
 }
+
+// errUnpushedBranch is a push that reported success and left the work on
+// host disk. The outcome and the step metric name it the same way.
+var errUnpushedBranch = errors.New("the branch did not reach the remote")
 
 // closingKeywords matches one of GitHub's closing keywords together with the
 // issue it names, in either the bare "#12" or the "owner/repo#12" form.

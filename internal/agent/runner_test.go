@@ -228,21 +228,84 @@ func (g *fakeGitHub) tokens() []string {
 	return append([]string(nil), g.minted...)
 }
 
+// countMetrics records everything the runner reports. The attempt runs on
+// its own goroutine and the tool calls on the agent's, so it locks.
 type countMetrics struct {
-	mu    sync.Mutex
-	ended []string
+	mu      sync.Mutex
+	ended   []string
+	stops   []string
+	steps   []string
+	tools   []string
+	running int
+	high    int
 }
 
-func (m *countMetrics) Ended(kind, outcome string, _ resolution.Usage) {
+func (m *countMetrics) Ended(kind, outcome, stop string, _ resolution.Usage) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ended = append(m.ended, kind+"/"+outcome)
+	m.stops = append(m.stops, stop)
+}
+
+// Step records the step name, suffixed "!" when the step failed.
+func (m *countMetrics) Step(step string, _ time.Duration, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err != nil {
+		step += "!"
+	}
+	m.steps = append(m.steps, step)
+}
+
+func (m *countMetrics) ToolCall(tool string, _ time.Duration, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := "ok"
+	if err != nil {
+		result = "error"
+	}
+	m.tools = append(m.tools, tool+"/"+result)
+}
+
+func (m *countMetrics) Running(delta int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.running += delta
+	if m.running > m.high {
+		m.high = m.running
+	}
 }
 
 func (m *countMetrics) all() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]string(nil), m.ended...)
+}
+
+func (m *countMetrics) allStops() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.stops...)
+}
+
+func (m *countMetrics) allSteps() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.steps...)
+}
+
+func (m *countMetrics) allTools() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.tools...)
+}
+
+// runningGauge is the high-water mark and where the gauge finished, which is
+// what proves every register was unregistered.
+func (m *countMetrics) runningGauge() (int, int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.high, m.running
 }
 
 // logRecorder keeps every line the runner logs so a test can prove no minted

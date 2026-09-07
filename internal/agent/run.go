@@ -10,6 +10,7 @@ import (
 
 	"github.com/guygrigsby/jess"
 	"github.com/guygrigsby/jess/ledger"
+	"github.com/guygrigsby/llm"
 	ac "github.com/voocel/agentcore"
 
 	"github.com/guygrigsby/autophage/internal/resolution"
@@ -23,7 +24,10 @@ const summaryPrompt = "The run has ended. Reply now with only your final summary
 
 // RunInput is everything one attempt run needs.
 type RunInput struct {
-	Model      ac.ChatModel
+	Model ac.ChatModel
+	// ModelID is the OpenRouter id Model was built for, which is the label
+	// a model failure is counted under.
+	ModelID    string
 	Tools      []ac.Tool
 	Ledger     ledger.DurableSink
 	Budget     resolution.Budget
@@ -33,6 +37,12 @@ type RunInput struct {
 	Clock      resolution.Clock
 	Logf       func(string, ...any)
 	OnRunBegan func(runID string) // called once, before the first model call returns
+	// Metrics counts the tool calls. Nil is NopMetrics.
+	Metrics Metrics
+	// ModelMetrics counts a model failure, which the adapter's own Meter
+	// never sees: it reports what the provider priced, and a call that
+	// failed before that has no usage to report. Nil is NopModelMetrics.
+	ModelMetrics ModelMetrics
 }
 
 // Stop says why a run ended before the agent finished on its own.
@@ -71,6 +81,14 @@ func RunAttempt(ctx context.Context, in RunInput) RunReport {
 	if diffLines == nil {
 		diffLines = func(context.Context) (int, error) { return 0, nil }
 	}
+	metrics := in.Metrics
+	if metrics == nil {
+		metrics = NopMetrics{}
+	}
+	modelMetrics := in.ModelMetrics
+	if modelMetrics == nil {
+		modelMetrics = NopModelMetrics{}
+	}
 	started := clock.Now()
 	capture := &captureRun{DurableSink: in.Ledger, began: in.OnRunBegan}
 	flag := &stopFlag{}
@@ -79,7 +97,7 @@ func RunAttempt(ctx context.Context, in RunInput) RunReport {
 	var agent *ac.Agent
 	tools := make([]ac.Tool, 0, len(in.Tools))
 	for _, t := range in.Tools {
-		tools = append(tools, &budgetTool{Tool: t, limit: in.Budget.MaxDiffLines(), diffLines: diffLines, stop: flag, abort: func() { agent.Abort() }, logf: logf})
+		tools = append(tools, &budgetTool{Tool: t, limit: in.Budget.MaxDiffLines(), diffLines: diffLines, stop: flag, abort: func() { agent.Abort() }, logf: logf, metrics: metrics})
 	}
 	// Turn steer must fire in lockstep with the loop, not react to it: jess
 	// forwards events to this function over two buffered channels, so a fast
@@ -180,6 +198,9 @@ func RunAttempt(ctx context.Context, in RunInput) RunReport {
 		if reportErr == nil {
 			reportErr = errors.New("model run ended with an error")
 		}
+		// The one model failure the adapter's Meter cannot report, counted
+		// here instead so the model panels show errors at all.
+		modelMetrics.Observe(in.ModelID, llm.Usage{}, reportErr)
 	}
 
 	// A caller cancellation is the only hard ceiling that skips the summary

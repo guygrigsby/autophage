@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	ac "github.com/voocel/agentcore"
 
@@ -20,10 +21,26 @@ type budgetTool struct {
 	stop      *stopFlag
 	abort     func()
 	logf      func(string, ...any)
+	// metrics counts the call and times it. Nil reports to nothing, which
+	// is what a budgetTool built by hand in a test does.
+	metrics Metrics
+}
+
+// meter tolerates an unwired metrics.
+func (b *budgetTool) meter() Metrics {
+	if b.metrics == nil {
+		return NopMetrics{}
+	}
+	return b.metrics
 }
 
 func (b *budgetTool) Execute(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+	// Timed around the tool itself, not around the diff count that follows:
+	// the count is autophage's own bookkeeping, and charging it to the tool
+	// would put a podman exec inside every write tool's latency.
+	start := time.Now()
 	out, err := b.Tool.Execute(ctx, args)
+	b.meter().ToolCall(b.Name(), time.Since(start), err)
 	// A read-only call cannot have moved the diff, and the count is not
 	// free: it is a podman exec into the agent's container running git over
 	// the whole tree. Reading a file is the commonest thing an agent does,
