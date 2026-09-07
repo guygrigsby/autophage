@@ -153,43 +153,20 @@ rejected the unsigned JSON request. A bare POST without the JSON content type
 gets `400` instead, which also proves the daemon answered. Anything else means
 Funnel or the daemon is not up yet.
 
-### A dedicated hostname (ssh, then operator)
+### Names and what is public
 
-Funnel serves under the node's own name. To give the webhook its own name
-(`https://autophage.<tailnet>.ts.net`) without renaming the host, run a second
-`tailscaled` in userspace mode as the `autophage` node. It needs no TUN
-device and no root; it forwards to the daemon on loopback like the host's own
-node would.
+Funnel is per node and per port: everything served on the node's 443 is
+public once Funnel is on, so put nothing but the webhook path there. Do not
+serve `/metrics` from the node's 443 (a first deployment did, and it was on
+the internet until removed).
 
-```bash
-ssh <host> 'mkdir -p ~/.config/systemd/user ~/.local/state/ts-autophage'
-ssh <host> 'cat > ~/.config/systemd/user/ts-autophage.service' <<'UNIT'
-[Unit]
-Description=tailscaled (userspace) for the autophage ingress node
-After=network-online.target
-
-[Service]
-ExecStart=/usr/bin/tailscaled --tun=userspace-networking --socket=%t/ts-autophage.sock --statedir=%h/.local/state/ts-autophage --port=0
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-UNIT
-ssh <host> 'systemctl --user daemon-reload && systemctl --user enable --now ts-autophage.service'
-ssh <host> 'tailscale --socket=/run/user/$(id -u)/ts-autophage.sock up --hostname=autophage --accept-dns=false --accept-routes=false'
-```
-
-`up` prints a login link (**operator**, browser). Once the node shows in the
-admin console, set the Funnel path on that instance, which prints the
-Funnel enable link for the new node (**operator** again):
-
-```bash
-ssh <host> 'tailscale --socket=/run/user/$(id -u)/ts-autophage.sock funnel --bg --set-path /webhook/github http://127.0.0.1:8080/webhook/github'
-```
-
-Verify as above against `https://autophage.<tailnet>.ts.net/webhook/github`.
-The App's webhook URL uses that name.
+A tailnet name for the daemon (`https://autophage.<tailnet>.ts.net` for the
+CLI, metrics and dashboards) is a Tailscale Service, not a machine: define
+it wherever the tailnet policy is managed as code (a `svc:` entry pointing at
+the daemon's `listen` port, granted to admins) and let that sync tool set the
+serve handlers on the host. Funnel cannot publish a service name on the
+current CLI, so the App's webhook URL stays on the host node's name; the
+service name carries everything tailnet-only.
 
 ## 8. Service (ssh)
 
