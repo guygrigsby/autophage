@@ -17,6 +17,16 @@ type Commenter struct {
 	Store  *store.Store
 	GitHub resolution.GitHub
 	Label  string
+	// Metrics counts the posts. Nil is NopCommentMetrics.
+	Metrics CommentMetrics
+}
+
+// metrics tolerates an unwired Metrics.
+func (m *Commenter) metrics() CommentMetrics {
+	if m.Metrics == nil {
+		return NopCommentMetrics{}
+	}
+	return m.Metrics
 }
 
 func (m *Commenter) Run(ctx context.Context) error {
@@ -30,9 +40,11 @@ func (m *Commenter) Run(ctx context.Context) error {
 	for _, c := range pending {
 		id, err := m.GitHub.PostComment(ctx, c.Repository, c.Number, c.Body)
 		if err != nil {
+			m.metrics().Post(resultError)
 			log.Printf("comment %s#%d: %v (will retry)", c.Repository, c.Number, err)
 			continue
 		}
+		m.metrics().Post(resultOK)
 		if err := m.Store.RecordCommentPost(ctx, c.ID, id); err != nil {
 			log.Printf("record comment post %s: %v", c.ID, err)
 		}

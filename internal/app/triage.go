@@ -45,6 +45,8 @@ type Triage struct {
 	// Model is the triage tier's model id, recorded on the triage that parks
 	// a case the model would not size.
 	Model string
+	// Metrics reports each sizing call. Nil is NopTriageMetrics.
+	Metrics TriageMetrics
 
 	// mu guards failures, which the dispatcher's goroutine reads and writes
 	// on every sweep. The record is in memory only: a restart forgets it and
@@ -85,14 +87,24 @@ func (t *Triage) one(ctx context.Context, k store.CaseKey) error {
 	if err != nil {
 		return err
 	}
+	start := time.Now()
 	tr, cerr := t.Triager.Classify(ctx, detail.Title, detail.Body)
-	if cerr != nil {
+	elapsed := time.Since(start)
+	switch {
+	case cerr == nil:
+		t.metrics().Triage(string(tr.Size), resultOK, elapsed)
+	default:
 		count, next := t.fail(k)
 		if count < triageGiveUp {
+			t.metrics().Triage(sizeNone, resultError, elapsed)
 			return fmt.Errorf("classify (failure %d, next attempt after %s): %w", count, next.Format(time.RFC3339), cerr)
 		}
 		// The model has refused this case often enough that waiting longer
-		// is not an answer. Park it for a human, saying why.
+		// is not an answer. Park it for a human, saying why. The size the
+		// park records is the policy's, not the model's, so the metric
+		// reports no size at all: what the operator needs from this row is
+		// that a case reached a human without ever being sized.
+		t.metrics().Triage(sizeNone, resultParked, elapsed)
 		tr = resolution.Triage{
 			Size:      resolution.Large,
 			Rationale: fmt.Sprintf("triage failed %d times, last error: %s", count, oneLine(cerr.Error())),
@@ -105,6 +117,14 @@ func (t *Triage) one(ctx context.Context, k store.CaseKey) error {
 	}
 	t.clear(k)
 	return nil
+}
+
+// metrics tolerates an unwired Metrics.
+func (t *Triage) metrics() TriageMetrics {
+	if t.Metrics == nil {
+		return NopTriageMetrics{}
+	}
+	return t.Metrics
 }
 
 func (t *Triage) model() string {

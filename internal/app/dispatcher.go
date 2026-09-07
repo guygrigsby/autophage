@@ -52,9 +52,20 @@ type Dispatcher struct {
 	// Floor is the cadence that makes every "will retry" true. Zero means
 	// defaultFloor.
 	Floor time.Duration
+	// Metrics counts the sweeps and times their steps. Nil is NopSweepMetrics.
+	Metrics SweepMetrics
 
 	mu   sync.Mutex
 	wake chan struct{}
+}
+
+// metrics tolerates an unwired Metrics, so a Dispatcher built by a test
+// reports to nothing rather than panicking.
+func (d *Dispatcher) metrics() SweepMetrics {
+	if d.Metrics == nil {
+		return NopSweepMetrics{}
+	}
+	return d.Metrics
 }
 
 // Run subscribes to store notifications before doing anything else, so a
@@ -141,8 +152,16 @@ func (d *Dispatcher) Sweep(ctx context.Context) {
 		{"comment", d.Commenter.Run},
 		{"schedule", d.Scheduler.Run},
 	}
+	m := d.metrics()
+	m.Sweep()
 	for _, s := range steps {
-		if err := s.run(ctx); err != nil && ctx.Err() == nil {
+		start := time.Now()
+		err := s.run(ctx)
+		// Reported whatever cancelled it: a step the shutdown cut short did
+		// not do its work, and the metric says so even where the log stays
+		// quiet about a failure nobody needs to read on the way down.
+		m.Step(s.name, time.Since(start), err)
+		if err != nil && ctx.Err() == nil {
 			log.Printf("sweep %s: %v", s.name, err)
 		}
 	}
