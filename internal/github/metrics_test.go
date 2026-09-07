@@ -98,6 +98,33 @@ func TestTransportRecordsEveryResponse(t *testing.T) {
 	}
 }
 
+// The App JWT's token mint is metered against the App's own quota, not the
+// installation's, so its X-RateLimit-Remaining must not land on a gauge an
+// operator reads as "how much repository quota is left".
+func TestTransportGaugesTheInstallationQuotaOnly(t *testing.T) {
+	m := &recordRequests{}
+	tr := &retryTransport{next: rtFunc(func(*http.Request) (*http.Response, error) {
+		return response(http.StatusOK, http.Header{"X-Ratelimit-Remaining": []string{"77"}}), nil
+	}), metrics: m}
+
+	for _, path := range []string{"/app/installations/42/access_tokens", "/repos/guy/repo"} {
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://api.github.com"+path, nil)
+		resp, err := tr.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+	}
+
+	requests, _, remaining := m.all()
+	if len(requests) != 2 {
+		t.Errorf("requests = %v, want both attempts counted", requests)
+	}
+	if len(remaining) != 1 || remaining[0] != 77 {
+		t.Errorf("rate limit remaining = %v, want only the repository call to have gauged it", remaining)
+	}
+}
+
 // A transport error never becomes a response, so it is counted under the
 // status "error": the alternative is a request the dashboard cannot see at
 // all, which is the failure an operator most wants to find.

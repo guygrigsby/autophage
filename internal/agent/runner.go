@@ -159,8 +159,18 @@ func (r *Runner) now() time.Time {
 	return r.Clock.Now()
 }
 
-// register puts the attempt in flight so Stop and Cancel can reach it.
+// register puts the attempt in flight so Stop and Cancel can reach it. The
+// gauge moves outside the lock: nothing about a metrics implementation is
+// this package's business, and holding the mutex across a call into one puts
+// somebody else's code on the path of every Stop and Cancel.
 func (r *Runner) register(attemptID string, cancel context.CancelFunc) *running {
+	slot := r.insert(attemptID, cancel)
+	r.metrics().Running(1)
+	return slot
+}
+
+// insert adds the slot under the lock.
+func (r *Runner) insert(attemptID string, cancel context.CancelFunc) *running {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.running == nil {
@@ -168,7 +178,6 @@ func (r *Runner) register(attemptID string, cancel context.CancelFunc) *running 
 	}
 	slot := &running{cancel: cancel}
 	r.running[attemptID] = slot
-	r.metrics().Running(1)
 	return slot
 }
 
@@ -176,15 +185,24 @@ func (r *Runner) register(attemptID string, cancel context.CancelFunc) *running 
 // slot, so calling it twice (once when the attempt ends, once from the
 // deferred backstop) cannot take a later run of the same attempt out with it.
 func (r *Runner) unregister(attemptID string, slot *running) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.running[attemptID] == slot {
-		delete(r.running, attemptID)
-		// Inside the lock and only on the delete that actually removed
-		// this run: unregister is called twice on the ordinary path, and a
-		// gauge moved by the second call would drift below zero.
+	// Only the call that actually removed this run moves the gauge:
+	// unregister is called twice on the ordinary path, and a gauge moved by
+	// the second call would drift below zero.
+	if r.remove(attemptID, slot) {
 		r.metrics().Running(-1)
 	}
+}
+
+// remove deletes this run's own slot under the lock, reporting whether it
+// was the one holding the map entry.
+func (r *Runner) remove(attemptID string, slot *running) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.running[attemptID] != slot {
+		return false
+	}
+	delete(r.running, attemptID)
+	return true
 }
 
 // reason is the abort reason Cancel recorded, or fallback when the run ended

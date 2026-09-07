@@ -72,8 +72,11 @@ var (
 	AttemptWallClock = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "autophage_attempt_wall_clock_seconds", Help: "Attempt wall clock", Buckets: prometheus.ExponentialBuckets(30, 2, 10)})
 	DeliveriesTotal  = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "autophage_deliveries_total", Help: "Webhook deliveries processed, by event and result"}, []string{"event", "result"})
 
-	AttemptsRunning    = prometheus.NewGauge(prometheus.GaugeOpts{Name: "autophage_attempts_running", Help: "Attempts in flight on this daemon"})
-	AttemptStepSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "autophage_attempt_step_seconds", Help: "One step of the attempt pipeline", Buckets: prometheus.ExponentialBucketsRange(0.1, 3600, 14)}, []string{"step"})
+	AttemptsRunning = prometheus.NewGauge(prometheus.GaugeOpts{Name: "autophage_attempts_running", Help: "Attempts in flight on this daemon"})
+	// Up to four hours, not one: the approved budget's wall clock is three,
+	// so a ceiling of an hour would put every approved run's step="run" in
+	// the overflow bucket and leave the quantile that matters unreadable.
+	AttemptStepSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "autophage_attempt_step_seconds", Help: "One step of the attempt pipeline", Buckets: prometheus.ExponentialBucketsRange(0.1, 14400, 16)}, []string{"step"})
 	AttemptStepErrors  = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "autophage_attempt_step_errors_total", Help: "Attempt pipeline steps that failed"}, []string{"step"})
 	AttemptToolCalls   = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "autophage_attempt_tool_calls_total", Help: "Tool calls the agent made, by tool and result"}, []string{"tool", "result"})
 	AttemptToolSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "autophage_attempt_tool_seconds", Help: "One tool call", Buckets: prometheus.ExponentialBucketsRange(0.05, 600, 14)}, []string{"tool"})

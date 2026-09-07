@@ -297,8 +297,14 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, err
 		}
 		t.meter().Request(method, strconv.Itoa(resp.StatusCode), elapsed)
-		if v, cerr := strconv.Atoi(resp.Header.Get("X-RateLimit-Remaining")); cerr == nil {
-			t.meter().RateLimitRemaining(v)
+		// Only the installation's quota reaches the gauge. The App JWT's
+		// own endpoints, the token mint among them, are counted against a
+		// separate pool, and mixing the two gives an operator a number that
+		// flips between them scrape by scrape.
+		if !appEndpoint(req.URL.Path) {
+			if v, cerr := strconv.Atoi(resp.Header.Get("X-RateLimit-Remaining")); cerr == nil {
+				t.meter().RateLimitRemaining(v)
+			}
 		}
 		if (resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusTooManyRequests) || attempt == 2 {
 			return resp, nil
@@ -334,6 +340,12 @@ func retryWait(resp *http.Response, now time.Time, attempt int) (time.Duration, 
 		return wait, reasonRateLimit
 	}
 	return baseBackoff << attempt, reasonBackoff
+}
+
+// appEndpoint reports whether a path is one the App JWT authenticates rather
+// than an installation token: /app and everything under it.
+func appEndpoint(path string) bool {
+	return path == "/app" || strings.HasPrefix(path, "/app/")
 }
 
 // throttled reports whether a 403 is a rate limit rather than a refusal:
