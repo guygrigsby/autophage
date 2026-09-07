@@ -75,9 +75,9 @@ check: lint ## One-shot quality gate for agents (run before claiming done)
 	go test -race ./...
 	@if [ -n "$(HAS_WEB)" ]; then $(MAKE) web-build; fi
 
-install: build ## Install both binaries to INSTALL_DIR
+install: build ## Install both binaries to INSTALL_DIR (copy then rename, so a running daemon is replaced atomically)
 	@mkdir -p $(INSTALL_DIR)
-	cp $(APP)d $(APP) $(INSTALL_DIR)/
+	@for b in $(APP)d $(APP); do cp "$$b" "$(INSTALL_DIR)/$$b.new" && mv -f "$(INSTALL_DIR)/$$b.new" "$(INSTALL_DIR)/$$b"; done
 	@echo "✓ installed $(APP)d, $(APP) to $(INSTALL_DIR)"
 
 install-launchd: install ## Install + load the autophaged LaunchAgent (macOS)
