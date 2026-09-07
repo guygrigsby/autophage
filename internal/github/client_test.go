@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -257,5 +258,86 @@ func TestGetIssueCommentPullLabel(t *testing.T) {
 	}
 	if len(f.labels) != 1 {
 		t.Errorf("label created %d times", len(f.labels))
+	}
+}
+
+// TestForbiddenWithoutThrottleIsNotRetried proves a 403 that is not a rate
+// limit (no Retry-After, quota remaining) comes straight back. GitHub sends
+// X-RateLimit-Reset on every response, and treating that as a throttle
+// parked the enrollment sweep for a minute per attempt on an archived
+// repository's permanent 403.
+func TestForbiddenWithoutThrottleIsNotRetried(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("X-RateLimit-Remaining", "4999")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+		http.Error(w, `{"message":"Repository was archived so is read-only."}`, http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	tr := &retryTransport{next: http.DefaultTransport, userAgent: "autophage-test"}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || calls.Load() != 1 {
+		t.Fatalf("status %d after %d calls, want one 403", resp.StatusCode, calls.Load())
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("waited %v on a permanent 403", time.Since(start))
+	}
+}
+
+// TestForbiddenPrimaryRateLimitIsRetried keeps the throttle case: a 403 with
+// the quota exhausted waits for the reset and tries again.
+func TestForbiddenPrimaryRateLimitIsRetried(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Second).Unix(), 10))
+			http.Error(w, `{"message":"API rate limit exceeded"}`, http.StatusForbidden)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	t.Cleanup(srv.Close)
+	tr := &retryTransport{next: http.DefaultTransport, userAgent: "autophage-test"}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || calls.Load() != 2 {
+		t.Fatalf("status %d after %d calls, want 200 after a retry", resp.StatusCode, calls.Load())
+	}
+}
+
+// TestEnsureLabelOnArchivedRepositoryIsReadOnly maps the archived
+// repository's 403 to resolution.ErrRepositoryReadOnly so enrollment can
+// stop retrying it.
+func TestEnsureLabelOnArchivedRepositoryIsReadOnly(t *testing.T) {
+	f, srv := newFakeGitHub(t)
+	f.mux.HandleFunc("GET /repos/guy/archived/labels/approved", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+	})
+	f.mux.HandleFunc("POST /repos/guy/archived/labels", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "4999")
+		http.Error(w, `{"message":"Repository was archived so is read-only."}`, http.StatusForbidden)
+	})
+	c := newTestClient(t, srv)
+	err := c.EnsureLabel(t.Context(), "guy/archived", "approved")
+	if !errors.Is(err, resolution.ErrRepositoryReadOnly) {
+		t.Fatalf("err = %v, want ErrRepositoryReadOnly", err)
 	}
 }

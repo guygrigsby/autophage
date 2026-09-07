@@ -98,7 +98,7 @@ func main() {
 		Triage:     &app.Triage{Store: st, Triager: runner.Triager(), GitHub: gh, Clock: clock, Model: cfg.Model.Triage.Model},
 		Scheduler:  scheduler,
 		Commenter:  &app.Commenter{Store: st, GitHub: gh, Label: cfg.Label.Approved},
-		Enrollment: &app.Enrollment{Store: st, GitHub: gh, Label: cfg.Label.Approved},
+		Enrollment: &app.Enrollment{Store: st, GitHub: gh, Label: cfg.Label.Approved, Clock: clock},
 		Recovery:   &app.Recovery{Store: st, Clock: clock},
 		Canceller:  runner,
 	}

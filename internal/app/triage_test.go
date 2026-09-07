@@ -74,6 +74,8 @@ type fakeGitHub struct {
 	// own recorded branch, so nothing is refreshed.
 	branch    string
 	postCalls int
+	// labelErr, when set, is what EnsureLabel returns.
+	labelErr error
 }
 
 func (f *fakeGitHub) GetIssue(_ context.Context, repo string, n int) (resolution.IssueDetail, error) {
@@ -116,7 +118,7 @@ func (f *fakeGitHub) EnsureLabel(_ context.Context, repo, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.labels = append(f.labels, repo+":"+name)
-	return nil
+	return f.labelErr
 }
 
 func (f *fakeGitHub) setIssue(repo string, n int, d resolution.IssueDetail) {

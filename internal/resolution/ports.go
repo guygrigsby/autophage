@@ -11,6 +11,11 @@ import (
 // rather than upstream_unavailable.
 var ErrIssueNotFound = errors.New("issue not found")
 
+// ErrRepositoryReadOnly is wrapped by GitHub when a write is refused because
+// the repository is archived. Enrollment records such a repository as
+// removed rather than retrying the write on every sweep.
+var ErrRepositoryReadOnly = errors.New("repository is read only")
+
 // IssueDetail is what the brief needs from GitHub at attempt time.
 type IssueDetail struct {
 	Title     string

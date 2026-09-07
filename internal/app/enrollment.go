@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log"
+	"time"
 
 	"github.com/guygrigsby/autophage/internal/resolution"
 	"github.com/guygrigsby/autophage/internal/store"
@@ -16,6 +18,7 @@ type Enrollment struct {
 	Store  *store.Store
 	GitHub resolution.GitHub
 	Label  string
+	Clock  resolution.Clock
 }
 
 // Run walks every enrolled repository with no label setup recorded. A
@@ -38,6 +41,16 @@ func (e *Enrollment) Run(ctx context.Context) error {
 			continue
 		}
 		if err := e.GitHub.EnsureLabel(ctx, r.FullName, e.Label); err != nil {
+			if errors.Is(err, resolution.ErrRepositoryReadOnly) {
+				// Archived: nothing autophage does there can land, so the
+				// repository leaves the sweep the way an uninstall would.
+				if rerr := e.Store.RemoveRepository(ctx, r.FullName, e.now()); rerr != nil {
+					log.Printf("remove read only %s: %v (will retry)", r.FullName, rerr)
+					continue
+				}
+				log.Printf("enrollment %s: read only, removed", r.FullName)
+				continue
+			}
 			log.Printf("label %s on %s: %v (will retry)", e.Label, r.FullName, err)
 			continue
 		}
@@ -66,4 +79,13 @@ func (e *Enrollment) refreshBranch(ctx context.Context, r resolution.Repository)
 	}
 	log.Printf("enrollment %s: default branch %s, was %s", r.FullName, branch, r.DefaultBranch)
 	return e.Store.EnrollRepository(ctx, fresh)
+}
+
+// now tolerates an unset Clock so a test that wires only the store and the
+// label keeps working.
+func (e *Enrollment) now() time.Time {
+	if e.Clock == nil {
+		return time.Now().UTC()
+	}
+	return e.Clock.Now()
 }

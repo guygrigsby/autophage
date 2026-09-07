@@ -43,3 +43,35 @@ func TestEnrollmentRefreshesDefaultBranch(t *testing.T) {
 		t.Errorf("label ensured again: %v", labels)
 	}
 }
+
+// TestEnrollmentDropsAReadOnlyRepository proves an archived repository, whose
+// label call fails with a permanent 403, is recorded as removed instead of
+// retried on every sweep. The first live installation covered every
+// repository the operator owns, archived ones included, and one of them
+// held the enrollment step for minutes per sweep.
+func TestEnrollmentDropsAReadOnlyRepository(t *testing.T) {
+	st := storetest.Open(t)
+	ctx := t.Context()
+	r, _ := resolution.NewRepository("guy/archived", 42, "main", t0)
+	if err := st.EnrollRepository(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	gh := &fakeGitHub{issues: map[string]resolution.IssueDetail{}, labelErr: resolution.ErrRepositoryReadOnly}
+	e := &Enrollment{Store: st, GitHub: gh, Label: "approved", Clock: fixedClock{t0}}
+	if err := e.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetRepository(ctx, "guy/archived")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Enrolled() {
+		t.Fatalf("read only repository still enrolled: %+v", got)
+	}
+	if err := e.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if labels := gh.ensuredLabels(); len(labels) != 1 {
+		t.Errorf("label retried on a removed repository: %v", labels)
+	}
+}

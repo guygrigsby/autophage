@@ -219,8 +219,11 @@ func (c *Client) EnsureLabel(ctx context.Context, repository, label string) erro
 	if resp == nil || resp.StatusCode != http.StatusNotFound {
 		return fmt.Errorf("github: get label %s on %s: %w", label, repository, err)
 	}
-	_, _, err = api.Issues.CreateLabel(ctx, owner, name, &gh.Label{Name: gh.Ptr(label), Color: gh.Ptr("0e8a16"), Description: gh.Ptr("autophage may act on this issue")})
+	_, resp, err = api.Issues.CreateLabel(ctx, owner, name, &gh.Label{Name: gh.Ptr(label), Color: gh.Ptr("0e8a16"), Description: gh.Ptr("autophage may act on this issue")})
 	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusForbidden {
+			return fmt.Errorf("github: create label %s on %s: %w: %w", label, repository, resolution.ErrRepositoryReadOnly, err)
+		}
 		return fmt.Errorf("github: create label %s on %s: %w", label, repository, err)
 	}
 	return nil
@@ -274,6 +277,13 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if (resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusTooManyRequests) || attempt == 2 {
 			return resp, nil
 		}
+		// A 403 is a throttle only when GitHub says so; every response
+		// carries X-RateLimit-Reset, so that header alone proves nothing.
+		// A permission refusal (an archived repository, a missing scope)
+		// is permanent and waiting on it only stalls the caller.
+		if resp.StatusCode == http.StatusForbidden && !throttled(resp) {
+			return resp, nil
+		}
 		wait := retryAfter(resp.Header.Get("Retry-After"))
 		if wait <= 0 {
 			wait = rateLimitReset(resp.Header.Get("X-RateLimit-Reset"), time.Now())
@@ -289,6 +299,13 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 	return nil, errors.New("unreachable")
+}
+
+// throttled reports whether a 403 is a rate limit rather than a refusal:
+// secondary limits carry Retry-After, the primary limit shows an exhausted
+// quota.
+func throttled(resp *http.Response) bool {
+	return resp.Header.Get("Retry-After") != "" || resp.Header.Get("X-RateLimit-Remaining") == "0"
 }
 
 // cloneRequest shallow-copies a request and deep-copies its header, so a
