@@ -154,7 +154,7 @@ recourse at all.
 | `RepairAttempt` | has-a (owned) | 1 to n, n ≥ 0 |
 | `BumpAbandonment` | has-a (owned) | 1 to 0..1 |
 | `BumpClosure` | has-a (owned) | 1 to 0..1 |
-| `BumpTransition` | has-a (owned) | 1 to n, n ≥ 1 |
+| `BumpTransition` | has-a (owned) | 1 to n, n ≥ 0. The initial state is not logged |
 | `Watch` | references | n to 1 |
 | `Repository` (Resolution) | references by full name | n to 1 |
 
@@ -431,7 +431,6 @@ without joining anything.
 
 | Value | Means |
 |---|---|
-| `opened` | |
 | `verdict_success` | |
 | `verdict_failure` | |
 | `verdict_failure_cap_reached` | |
@@ -441,6 +440,7 @@ without joining anything.
 | `repair_no_change` | |
 | `repair_budget_exhausted` | |
 | `repair_failed_infra_requeued` | |
+| `repair_requeue_capped` | A requeue the cap would never let run, so it abandons instead |
 | `repair_failed_abandoned` | |
 | `repair_aborted_operator_stop` | |
 | `repair_aborted_restart_requeued` | |

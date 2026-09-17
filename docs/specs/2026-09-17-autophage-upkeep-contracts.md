@@ -145,9 +145,10 @@ INSERT INTO closure_kinds VALUES ('merged'), ('discarded');
 
 CREATE TABLE bump_transition_causes (cause TEXT PRIMARY KEY);
 INSERT INTO bump_transition_causes VALUES
-  ('opened'), ('verdict_success'), ('verdict_failure'), ('verdict_failure_cap_reached'),
+  ('verdict_success'), ('verdict_failure'), ('verdict_failure_cap_reached'),
   ('checks_never_concluded'), ('repair_started'), ('repair_pushed'), ('repair_no_change'),
-  ('repair_budget_exhausted'), ('repair_failed_infra_requeued'), ('repair_failed_abandoned'),
+  ('repair_budget_exhausted'), ('repair_failed_infra_requeued'), ('repair_requeue_capped'),
+  ('repair_failed_abandoned'),
   ('repair_aborted_operator_stop'), ('repair_aborted_restart_requeued'),
   ('repair_aborted_restart_abandoned'), ('head_advanced'), ('operator_retry'), ('closed');
 ```
