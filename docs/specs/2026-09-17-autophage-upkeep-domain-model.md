@@ -140,8 +140,10 @@ failed to repair is not new information, and reviving on every dependabot
 force-push is an unbounded retry loop wearing a different name. A genuinely
 newer version arrives as a new pull request, hence a new bump.
 
-`Retry` is the one thing that undoes an abandonment, and only an operator
-can ask for it. It deletes the abandonment rather than appending a fact,
+`Retry` lands where the current head's checks put it: `queued` when there is
+a failing verdict to repair from, `awaiting_checks` when there is none, and
+refused from `green`, where there is nothing to fix. It is the one thing that
+undoes an abandonment, and only an operator can ask for it. It deletes the abandonment rather than appending a fact,
 which is the second place in the system that does so. It exists because
 abandonment can follow a transient problem and there would otherwise be no
 recourse at all.

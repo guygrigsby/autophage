@@ -44,6 +44,11 @@ type RepairScheduler struct {
 	Clock       resolution.Clock
 	Budgets     BudgetPolicy
 	RoundCap    int
+	// DependabotLogin is re-checked against the pull request's author before
+	// every round. The webhook decided it once, possibly months ago, and a
+	// login can be renamed and the old one re-registered; this is the moment
+	// autophage is about to push, so it is the moment worth checking.
+	DependabotLogin string
 
 	wg sync.WaitGroup
 
@@ -114,6 +119,10 @@ func (s *RepairScheduler) start(ctx context.Context, k store.BumpKey) (bool, err
 	}
 	if !pr.Open {
 		log.Printf("repair %s#%d: pull request is closed on GitHub, waiting for the delivery", k.Repository, k.Number)
+		return false, nil
+	}
+	if s.DependabotLogin != "" && pr.AuthorLogin != s.DependabotLogin {
+		log.Printf("repair %s#%d: author is now %s, not %s; starting no round", k.Repository, k.Number, pr.AuthorLogin, s.DependabotLogin)
 		return false, nil
 	}
 	current, err := s.Store.GetBump(ctx, k.Repository, k.Number)

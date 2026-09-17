@@ -67,3 +67,15 @@ func TestUpkeepIsNotValidatedWhenOff(t *testing.T) {
 		t.Errorf("err = %v, want nil while upkeep is off", err)
 	}
 }
+
+// A typo in dependabot_login silently widens trust from a bot to whatever
+// human account the typo names, and nothing downstream would notice.
+func TestUpkeepRefusesADependabotLoginThatIsNotABot(t *testing.T) {
+	c := complete()
+	c.Upkeep.Enabled = true
+	c.Upkeep.DependabotLogin = "dependabot"
+	_, err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "upkeep.dependabot_login") {
+		t.Errorf("err = %v, want a complaint about dependabot_login", err)
+	}
+}

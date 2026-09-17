@@ -128,6 +128,7 @@ func main() {
 		dispatcher.RepairScheduler = &app.RepairScheduler{
 			Store: st, Runner: repairer, GitHub: gh, Concurrency: cfg.Sandbox.Concurrency,
 			Clock: clock, Budgets: app.BudgetPolicy{Repair: budgets.Repair}, RoundCap: budgets.RoundCap,
+			DependabotLogin: cfg.Upkeep.DependabotLogin,
 		}
 		dispatcher.RepairCanceller = repairer
 		stopRepair = repairer.Stop

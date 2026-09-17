@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/guygrigsby/autophage/internal/store"
@@ -296,5 +297,31 @@ func TestOwnEventCheckStillIgnoresOurOwnDeliveries(t *testing.T) {
 	}
 	if r, detail := processing(t, st, "d-own"); r != "ignored" || detail != "own event" {
 		t.Errorf("result = %s (%s), want ignored/own event", r, detail)
+	}
+}
+
+// A fork's pull request carries the fork's branch name, and recording it
+// would later point a repair push at a same-named branch in the base
+// repository. Refused here as a decision, not left to fail later in git.
+func TestPullRequestFromAForkIsIgnored(t *testing.T) {
+	st := storetest.Open(t)
+	tr := upkeepTranslator(st, &stubRollup{})
+	enrolledAndWatched(t, st, tr)
+	body := fixture(t, "pull_request_opened.json")
+	forked := strings.Replace(string(body),
+		`"head": {"ref": "dependabot/go_modules/golang.org/x/net-0.38.0", "sha": "1111111111111111111111111111111111111111"}`,
+		`"head": {"ref": "dependabot/go_modules/golang.org/x/net-0.38.0", "sha": "1111111111111111111111111111111111111111", "repo": {"full_name": "attacker/repo"}}`, 1)
+	d := store.Delivery{ID: "d-fork", Event: "pull_request", Action: "opened", SenderLogin: "dependabot[bot]", Payload: []byte(forked), ReceivedAt: t0}
+	if _, err := st.StoreDelivery(t.Context(), d); err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.ProcessPending(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if r, detail := processing(t, st, "d-fork"); r != "ignored" {
+		t.Errorf("result = %s (%s), want ignored", r, detail)
+	}
+	if _, err := st.GetBump(t.Context(), "guy/repo", 11); err == nil {
+		t.Error("a fork's pull request became a bump")
 	}
 }

@@ -126,6 +126,24 @@ or a GitHub outage as a verdict about the code would abandon bumps for
 reasons that have nothing to do with them. Model and agent failures are
 verdicts about the code and do abandon.
 
+A security pass after implementation changed four things, recorded here
+because each was a decision and not a typo. The check rollup is fully
+paginated and fails closed when it sees fewer entries than GitHub's own
+count: a single page of a large matrix build can report a red bump green,
+and that is the one wrong answer the wait window cannot undo. Everything in
+a repair brief that autophage did not write is fenced and escaped, not just
+dependabot's title: check run names and commit status contexts are free text
+from anyone with `checks: write` or push access, and the previous round's
+summary is a model's own output read back from the database. A bump's head
+must live in the repository itself, so a fork's pull request is refused as a
+decision rather than failing later in git. And the pull request's author is
+re-checked immediately before a round starts, because the webhook decided
+that once, possibly months ago, and a login can be renamed and re-registered.
+
+Trust is still a login match rather than a numeric account id. That is a
+known weakness, mitigated only by requiring the configured value to end in
+`[bot]` so a typo cannot quietly widen trust to a human account.
+
 Rejected alternatives, one line each: a Case subtype keyed by pull request
 number (five terms mean different things, so it is a seam, not a flag);
 recomputing CI in the sandbox (duplicates Actions); merging on green

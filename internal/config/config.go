@@ -173,8 +173,13 @@ func (c Config) Validate() (Budgets, error) {
 	errs = append(errs, e)
 	if c.Upkeep.Enabled {
 		b.UpkeepEnabled = true
+		// Trust here is a login match, so a typo does not fail closed: it
+		// silently widens trust to whatever account the typo names. The
+		// "[bot]" suffix is the cheap shape check that catches it.
 		if c.Upkeep.DependabotLogin == "" {
 			errs = append(errs, errors.New("upkeep.dependabot_login is required"))
+		} else if !strings.HasSuffix(c.Upkeep.DependabotLogin, "[bot]") {
+			errs = append(errs, fmt.Errorf("upkeep.dependabot_login %q is not a bot account (it must end in \"[bot]\"): trust here is a login match, so a typo would widen it to a human", c.Upkeep.DependabotLogin))
 		}
 		if c.Upkeep.RoundCap < 1 {
 			errs = append(errs, errors.New("upkeep.round_cap must be at least 1"))

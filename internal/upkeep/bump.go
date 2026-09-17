@@ -449,18 +449,33 @@ func (b *Bump) Abandon(a BumpAbandonment) error {
 
 // Retry is the one thing that undoes an abandonment, and only an operator
 // asks for it. It grants one further round, which cap reads back out of the
-// transition log. Refused while the checks are still running, because
-// repairing without knowing what is broken is guesswork.
+// transition log.
+//
+// Where it lands depends on what the current head's checks actually said. A
+// bump abandoned because they never concluded has no verdict to repair from,
+// so it goes back to waiting rather than to the queue: queued with no
+// verdict is a bump the scheduler asks GitHub about on every sweep for ever
+// and can never start, because the brief has no failure to describe. A bump
+// with a failing verdict goes to the queue for another round. A green bump
+// is refused outright: there is nothing to fix, and a round started on one
+// would push to somebody else's branch over a break that does not exist.
 func (b *Bump) Retry(at time.Time) error {
 	if b.state != Abandoned && b.state != Green {
 		return resolution.Refused("retry in state %s", b.state)
+	}
+	to := AwaitingChecks
+	if v := b.CurrentVerdict(); v != nil {
+		if v.Conclusion == CheckSuccess {
+			return resolution.Refused("the checks on %s passed; there is nothing to repair", b.headSha)
+		}
+		to = Queued
 	}
 	if b.abandonment != nil {
 		b.abandonment = nil
 		b.changes.Abandonment = nil
 		b.changes.DropAbandon = true
 	}
-	b.move(Queued, CauseOperatorRetry, at)
+	b.move(to, CauseOperatorRetry, at)
 	return nil
 }
 

@@ -528,3 +528,38 @@ func TestAccessorsCopy(t *testing.T) {
 		t.Errorf("conclusion = %s, want failure: Verdicts handed out the real slice", got)
 	}
 }
+
+// A bump abandoned because its checks never concluded has no verdict at all,
+// so there is nothing to repair. Sending it to queued would make the
+// scheduler ask GitHub about it on every sweep for ever and start nothing,
+// because the brief has no failure to describe. It goes back to waiting.
+func TestRetryOfAnUnconcludedBumpRestartsTheWait(t *testing.T) {
+	b := newTestBump(t)
+	err := b.Abandon(BumpAbandonment{Reason: AbandonChecksNeverConcluded, Detail: "no rollup in 6h", AbandonedAt: at(360)})
+	if err != nil {
+		t.Fatalf("Abandon: %v", err)
+	}
+	if err := b.Retry(at(400)); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	wantState(t, b, AwaitingChecks)
+	if got := lastCause(t, b); got != CauseOperatorRetry {
+		t.Errorf("cause = %s, want %s", got, CauseOperatorRetry)
+	}
+	if b.Abandonment() != nil {
+		t.Error("abandonment survived the retry")
+	}
+}
+
+// Green has a success verdict and nothing to fix. Retrying it would send an
+// agent to push to somebody else's branch over a break that does not exist.
+func TestRetryFromGreenIsRefused(t *testing.T) {
+	b := newTestBump(t)
+	if err := b.RecordVerdict(success(sha1, 1), maxRounds); err != nil {
+		t.Fatalf("RecordVerdict: %v", err)
+	}
+	if err := b.Retry(at(2)); !errors.Is(err, resolution.ErrRefused) {
+		t.Errorf("err = %v, want ErrRefused", err)
+	}
+	wantState(t, b, Green)
+}

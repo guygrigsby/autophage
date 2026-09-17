@@ -76,6 +76,14 @@ func (t *Translator) openBump(ctx context.Context, e *gh.PullRequestEvent) (stri
 	repo := e.GetRepo().GetFullName()
 	number := e.GetNumber()
 	pr := e.GetPullRequest()
+	// The head must live in this repository. Dependabot pushes its branches
+	// to the repository itself, so a head elsewhere is not a bump we could
+	// work even if we wanted to: the branch name would be recorded here and
+	// a later repair would push it to a same-named branch in the base
+	// repository. Refused as a decision rather than left to fail in git.
+	if head := pr.GetHead().GetRepo().GetFullName(); head != "" && head != repo {
+		return fmt.Sprintf("head is on %s, not %s", head, repo), errUnsubscribed
+	}
 	b, err := upkeep.NewBump(repo, number, pr.GetHead().GetRef(), pr.GetBase().GetRef(), pr.GetHead().GetSHA(), t.Clock.Now())
 	if err != nil {
 		return "BumpOpened", err

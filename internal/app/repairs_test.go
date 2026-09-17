@@ -94,7 +94,7 @@ func TestRepairSchedulerStartsInQueuedOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	runner := &fakeRepairRunner{release: make(chan struct{})}
-	s := &RepairScheduler{Store: st, Runner: runner, GitHub: gh, Concurrency: 2, Clock: fixedClock{t0}, Budgets: repairPolicy(t), RoundCap: 3}
+	s := &RepairScheduler{Store: st, Runner: runner, GitHub: gh, Concurrency: 2, Clock: fixedClock{t0}, Budgets: repairPolicy(t), RoundCap: 3, DependabotLogin: "dependabot[bot]"}
 	if err := s.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestRepairSchedulerSharesConcurrencyWithIssueAttempts(t *testing.T) {
 	}
 
 	repairRunner := &fakeRepairRunner{release: make(chan struct{})}
-	rs := &RepairScheduler{Store: st, Runner: repairRunner, GitHub: gh, Concurrency: 1, Clock: fixedClock{t0}, Budgets: repairPolicy(t), RoundCap: 3}
+	rs := &RepairScheduler{Store: st, Runner: repairRunner, GitHub: gh, Concurrency: 1, Clock: fixedClock{t0}, Budgets: repairPolicy(t), RoundCap: 3, DependabotLogin: "dependabot[bot]"}
 	if err := rs.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestRepairSchedulerSkipsAnUnwatchedRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &fakeRepairRunner{release: make(chan struct{})}
-	s := &RepairScheduler{Store: st, Runner: runner, GitHub: gh, Concurrency: 2, Clock: fixedClock{t0}, Budgets: repairPolicy(t), RoundCap: 3}
+	s := &RepairScheduler{Store: st, Runner: runner, GitHub: gh, Concurrency: 2, Clock: fixedClock{t0}, Budgets: repairPolicy(t), RoundCap: 3, DependabotLogin: "dependabot[bot]"}
 	if err := s.Run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestRepairSchedulerSkipsAClosedPullRequest(t *testing.T) {
 	pr.Open = false
 	gh.pulls[11] = pr
 	runner := &fakeRepairRunner{release: make(chan struct{})}
-	s := &RepairScheduler{Store: st, Runner: runner, GitHub: gh, Concurrency: 2, Clock: fixedClock{t0}, Budgets: repairPolicy(t), RoundCap: 3}
+	s := &RepairScheduler{Store: st, Runner: runner, GitHub: gh, Concurrency: 2, Clock: fixedClock{t0}, Budgets: repairPolicy(t), RoundCap: 3, DependabotLogin: "dependabot[bot]"}
 	if err := s.Run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestRepairSchedulerSkipsWhenTheHeadMovedUnderIt(t *testing.T) {
 	pr.HeadSha = repairHeadB
 	gh.pulls[11] = pr
 	runner := &fakeRepairRunner{release: make(chan struct{})}
-	s := &RepairScheduler{Store: st, Runner: runner, GitHub: gh, Concurrency: 2, Clock: fixedClock{t0}, Budgets: repairPolicy(t), RoundCap: 3}
+	s := &RepairScheduler{Store: st, Runner: runner, GitHub: gh, Concurrency: 2, Clock: fixedClock{t0}, Budgets: repairPolicy(t), RoundCap: 3, DependabotLogin: "dependabot[bot]"}
 	if err := s.Run(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestBumpRecoveryEndsOpenRounds(t *testing.T) {
 	gh := queueBumps(t, st, 11)
 	ctx, cancel := context.WithCancel(t.Context())
 	runner := &fakeRepairRunner{release: make(chan struct{})}
-	s := &RepairScheduler{Store: st, Runner: runner, GitHub: gh, Concurrency: 1, Clock: fixedClock{t0}, Budgets: repairPolicy(t), RoundCap: 3}
+	s := &RepairScheduler{Store: st, Runner: runner, GitHub: gh, Concurrency: 1, Clock: fixedClock{t0}, Budgets: repairPolicy(t), RoundCap: 3, DependabotLogin: "dependabot[bot]"}
 	if err := s.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestBumpRecoveryNamesAClosedPullRequest(t *testing.T) {
 	gh := queueBumps(t, st, 11)
 	ctx, cancel := context.WithCancel(t.Context())
 	runner := &fakeRepairRunner{release: make(chan struct{})}
-	s := &RepairScheduler{Store: st, Runner: runner, GitHub: gh, Concurrency: 1, Clock: fixedClock{t0}, Budgets: repairPolicy(t), RoundCap: 3}
+	s := &RepairScheduler{Store: st, Runner: runner, GitHub: gh, Concurrency: 1, Clock: fixedClock{t0}, Budgets: repairPolicy(t), RoundCap: 3, DependabotLogin: "dependabot[bot]"}
 	if err := s.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -361,4 +361,25 @@ func assertNoRounds(t *testing.T, st *store.Store) {
 	if len(open) != 0 {
 		t.Errorf("open rounds = %d, want 0", len(open))
 	}
+}
+
+// Identity is decided at webhook time from a login, and a login can be
+// renamed and re-registered. The scheduler already re-fetches the pull
+// request before it pushes, so it re-checks the author too: the alternative
+// is acting on a months-old decision at the moment it matters most.
+func TestRepairSchedulerRefusesAPullRequestThatChangedHands(t *testing.T) {
+	st := storetest.Open(t)
+	gh := queueBumps(t, st, 11)
+	pr := gh.pulls[11]
+	pr.AuthorLogin = "someone-else"
+	gh.pulls[11] = pr
+	runner := &fakeRepairRunner{release: make(chan struct{})}
+	s := &RepairScheduler{Store: st, Runner: runner, GitHub: gh, Concurrency: 2, Clock: fixedClock{t0},
+		Budgets: repairPolicy(t), RoundCap: 3, DependabotLogin: "dependabot[bot]"}
+	if err := s.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	close(runner.release)
+	s.Wait()
+	assertNoRounds(t, st)
 }

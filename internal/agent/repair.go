@@ -209,9 +209,15 @@ func (p *Repairer) execute(ctx, caller context.Context, b *upkeep.Bump, a upkeep
 	setup := func(step string, err error) (upkeep.RepairOutcome, error) {
 		if ctx.Err() != nil {
 			if reason := p.reason(slot, ""); reason != "" {
+				// The error is logged against the round id and kept out of
+				// the summary, which is stored and served by the API: a git
+				// argv carries the clone URL and the absolute workspace
+				// path, and the discipline the infra path already keeps
+				// applies here too.
+				p.logf("repair %s: stopped during %s: %v", a.ID, step, err)
 				return upkeep.RepairOutcome{
 					Kind: upkeep.RepairAborted, Reason: reason,
-					Summary: "The round was stopped during " + step + ", before the agent ran: " + err.Error(),
+					Summary: "The round was stopped during " + step + ", before the agent ran.",
 					EndedAt: p.now(),
 				}, nil
 			}

@@ -252,8 +252,11 @@ func TestAbandonmentAndClosureRoundTrip(t *testing.T) {
 	if a := got.Abandonment(); a != nil {
 		t.Errorf("abandonment = %+v, want none after retry", a)
 	}
-	if got.State() != upkeep.Queued {
-		t.Errorf("state = %s, want queued", got.State())
+	// The abandonment was checks_never_concluded, so there is no verdict to
+	// repair from and the retry restarts the wait rather than queueing a
+	// round the scheduler could never start.
+	if got.State() != upkeep.AwaitingChecks {
+		t.Errorf("state = %s, want awaiting_checks", got.State())
 	}
 	cl := upkeep.BumpClosure{Kind: upkeep.Merged, DeliveryID: "d-close", ClosedAt: t0.Add(8 * time.Hour)}
 	if _, err := s.UpdateBump(ctx, "guy/repo", 7, func(b *upkeep.Bump) error { return b.Close(cl) }); err != nil {

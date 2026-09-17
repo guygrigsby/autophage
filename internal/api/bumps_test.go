@@ -166,8 +166,11 @@ func TestRetryUndoesAnAbandonment(t *testing.T) {
 	if code != http.StatusAccepted {
 		t.Fatalf("retry = %d %v", code, body)
 	}
-	if body["state"] != "queued" {
-		t.Errorf("state = %v, want queued", body["state"])
+	// awaiting_checks, not queued: this bump was abandoned because its
+	// checks never concluded, so there is no failing verdict to repair from
+	// and what it needs is another look, not a round.
+	if body["state"] != "awaiting_checks" {
+		t.Errorf("state = %v, want awaiting_checks", body["state"])
 	}
 	b, err := st.GetBump(ctx, "guy/repo", 11)
 	if err != nil {

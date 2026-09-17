@@ -2,8 +2,10 @@ package github
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/guygrigsby/autophage/internal/upkeep"
@@ -181,5 +183,138 @@ func TestGetPullRequestReadsTheHead(t *testing.T) {
 	}
 	if pr.AuthorLogin != "dependabot[bot]" || !pr.Open || pr.Merged {
 		t.Errorf("pull request = %+v", pr)
+	}
+}
+
+// pagedServer serves the status and check-run endpoints as multiple pages,
+// linked by the Link header go-github follows.
+func pagedServer(t *testing.T, statusPages, runPages []map[string]any) *httptest.Server {
+	t.Helper()
+	_, srv := newFakeGitHub(t)
+	mux := http.NewServeMux()
+	page := func(r *http.Request) int {
+		n, err := strconv.Atoi(r.URL.Query().Get("page"))
+		if err != nil || n < 1 {
+			return 1
+		}
+		return n
+	}
+	serve := func(pages []map[string]any, path string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			i := page(r) - 1
+			if i >= len(pages) {
+				i = len(pages) - 1
+			}
+			if i+1 < len(pages) {
+				w.Header().Set("Link", fmt.Sprintf(`<%s%s?page=%d>; rel="next"`, srv.URL, path, i+2))
+			}
+			_ = json.NewEncoder(w).Encode(pages[i])
+		}
+	}
+	mux.HandleFunc("POST /app/installations/42/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": "ghs_test", "expires_at": "2099-01-01T00:00:00Z"})
+	})
+	mux.HandleFunc("GET /repos/guy/repo/commits/{sha}/status", serve(statusPages, "/repos/guy/repo/commits/"+headA+"/status"))
+	mux.HandleFunc("GET /repos/guy/repo/commits/{sha}/check-runs", serve(runPages, "/repos/guy/repo/commits/"+headA+"/check-runs"))
+	srv.Config.Handler = mux
+	return srv
+}
+
+// A failure on the second page is still a failure. Reading only page one
+// reports a red bump green, which is the fail-open the rollup exists to
+// prevent.
+func TestCheckRollupReadsEveryPageOfCheckRuns(t *testing.T) {
+	srv := pagedServer(t,
+		[]map[string]any{{"state": "success", "statuses": []any{}, "total_count": 0}},
+		[]map[string]any{
+			{"total_count": 2, "check_runs": []any{map[string]any{"name": "test (1.25)", "status": "completed", "conclusion": "success"}}},
+			{"total_count": 2, "check_runs": []any{map[string]any{"name": "test (1.26)", "status": "completed", "conclusion": "failure", "html_url": "https://x"}}},
+		})
+	c := newTestClient(t, srv)
+	roll, err := c.CheckRollup(t.Context(), "guy/repo", headA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !roll.Conclusive || roll.Conclusion != upkeep.CheckFailure {
+		t.Fatalf("rollup = %+v, want a conclusive failure from page two", roll)
+	}
+	if len(roll.FailingContexts) != 1 || roll.FailingContexts[0] != "test (1.26)" {
+		t.Errorf("failing contexts = %v", roll.FailingContexts)
+	}
+}
+
+// A run still in progress on page two must leave the rollup inconclusive,
+// not conclusively green from page one.
+func TestCheckRollupSeesAPendingRunOnALaterPage(t *testing.T) {
+	srv := pagedServer(t,
+		[]map[string]any{{"state": "success", "statuses": []any{}, "total_count": 0}},
+		[]map[string]any{
+			{"total_count": 2, "check_runs": []any{map[string]any{"name": "test (1.25)", "status": "completed", "conclusion": "success"}}},
+			{"total_count": 2, "check_runs": []any{map[string]any{"name": "test (1.26)", "status": "in_progress"}}},
+		})
+	c := newTestClient(t, srv)
+	roll, err := c.CheckRollup(t.Context(), "guy/repo", headA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if roll.Conclusive {
+		t.Errorf("rollup = %+v, want inconclusive", roll)
+	}
+}
+
+func TestCheckRollupReadsEveryPageOfStatuses(t *testing.T) {
+	srv := pagedServer(t,
+		[]map[string]any{
+			{"state": "failure", "total_count": 2, "statuses": []any{map[string]any{"context": "ci/one", "state": "success"}}},
+			{"state": "failure", "total_count": 2, "statuses": []any{map[string]any{"context": "ci/two", "state": "failure", "target_url": "https://x"}}},
+		},
+		[]map[string]any{{"total_count": 0, "check_runs": []any{}}})
+	c := newTestClient(t, srv)
+	roll, err := c.CheckRollup(t.Context(), "guy/repo", headA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !roll.Conclusive || roll.Conclusion != upkeep.CheckFailure {
+		t.Fatalf("rollup = %+v, want a conclusive failure from page two", roll)
+	}
+}
+
+// GitHub says how many there are. Seeing fewer means a page was lost, and a
+// verdict from a partial view is worse than no verdict at all.
+func TestCheckRollupFailsClosedWhenItSawFewerThanGitHubCounted(t *testing.T) {
+	srv := checksServer(t,
+		map[string]any{"state": "success", "statuses": []any{}, "total_count": 0},
+		map[string]any{"total_count": 9, "check_runs": []any{
+			map[string]any{"name": "test", "status": "completed", "conclusion": "success"},
+		}})
+	c := newTestClient(t, srv)
+	roll, err := c.CheckRollup(t.Context(), "guy/repo", headA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if roll.Conclusive {
+		t.Errorf("rollup = %+v, want inconclusive: GitHub counted 9 runs and only 1 arrived", roll)
+	}
+}
+
+// An unnamed failing check must still produce a non-empty failing context,
+// or the aggregate's "set exactly for a failure" invariant rejects every
+// delivery for that head for ever.
+func TestCheckRollupNamesAnUnnamedFailure(t *testing.T) {
+	srv := checksServer(t,
+		map[string]any{"state": "failure", "total_count": 1, "statuses": []any{
+			map[string]any{"context": "", "state": "failure"},
+		}},
+		map[string]any{"total_count": 0, "check_runs": []any{}})
+	c := newTestClient(t, srv)
+	roll, err := c.CheckRollup(t.Context(), "guy/repo", headA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !roll.Conclusive || roll.Conclusion != upkeep.CheckFailure {
+		t.Fatalf("rollup = %+v", roll)
+	}
+	if len(roll.FailingContexts) != 1 || roll.FailingContexts[0] == "" {
+		t.Errorf("failing contexts = %q, want a placeholder rather than an empty string", roll.FailingContexts)
 	}
 }
