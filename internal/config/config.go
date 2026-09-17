@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/guygrigsby/autophage/internal/resolution"
@@ -19,6 +20,7 @@ type Config struct {
 	Budget  BudgetConfig  `toml:"budget"`
 	Sandbox SandboxConfig `toml:"sandbox"`
 	Label   LabelConfig   `toml:"label"`
+	Upkeep  UpkeepConfig  `toml:"upkeep"`
 }
 
 type DBConfig struct {
@@ -65,6 +67,24 @@ type LabelConfig struct {
 	Approved string `toml:"approved"`
 }
 
+// UpkeepConfig is the dependabot half. Off by default: turning it on
+// subscribes the App to three more events and lets autophage push to
+// branches it did not create, which is an operator's decision rather than a
+// default.
+type UpkeepConfig struct {
+	Enabled         bool   `toml:"enabled"`
+	DependabotLogin string `toml:"dependabot_login"`
+	// RoundCap bounds the push, check, push cycle: how many repair rounds one
+	// bump may spend before it is abandoned, before operator retry grants.
+	RoundCap int `toml:"round_cap"`
+	// CheckWindow is how long a bump waits for a conclusive check rollup
+	// before it is abandoned. It has to outlast a slow matrix build and a
+	// queued Actions runner without stranding a repository that runs no
+	// checks on pull requests at all.
+	CheckWindow string     `toml:"check_window"` // Go duration
+	Budget      BudgetTier `toml:"budget"`
+}
+
 // Default is the starting point perch overlays the file on.
 func Default() Config {
 	return Config{
@@ -74,6 +94,15 @@ func Default() Config {
 		Sandbox: SandboxConfig{Image: "localhost/autophage-sandbox:latest", WorkspacesDir: "~/.local/share/autophage/workspaces", Concurrency: 2},
 		Label:   LabelConfig{Approved: "approved"},
 		GitHub:  GitHubConfig{BotLogin: "autophage[bot]"},
+		Upkeep: UpkeepConfig{
+			DependabotLogin: "dependabot[bot]",
+			RoundCap:        3,
+			CheckWindow:     "6h",
+			// Smaller than auto: a repair reads a failing check and a diff
+			// that already exists rather than writing a fix from a
+			// description.
+			Budget: BudgetTier{Turns: 25, WallClock: "30m", DiffLines: 300},
+		},
 	}
 }
 
@@ -97,9 +126,25 @@ func LoadSecrets() (Secrets, error) {
 	return Secrets{WebhookSecret: []byte(ws), OpenRouterKey: or}, errors.Join(errs...)
 }
 
+// Budgets is everything Validate turns the file into: the domain budgets and
+// the Upkeep numbers, so a caller gets one value rather than a growing list
+// of returns.
+type Budgets struct {
+	Auto     resolution.Budget
+	Approved resolution.Budget
+	// Repair is the zero Budget when upkeep is off.
+	Repair        resolution.Budget
+	UpkeepEnabled bool
+	RoundCap      int
+	CheckWindow   time.Duration
+}
+
 // Validate checks the file's values and turns the budget tiers into domain
-// budgets. Model ids are checked only for presence.
-func (c Config) Validate() (auto, approved resolution.Budget, err error) {
+// budgets. Model ids are checked only for presence. The upkeep section is
+// checked only when it is enabled, so a half-written one cannot stop a
+// daemon that is not using it.
+func (c Config) Validate() (Budgets, error) {
+	var b Budgets
 	var errs []error
 	if c.GitHub.AppID <= 0 {
 		errs = append(errs, errors.New("github.app_id is required"))
@@ -121,21 +166,57 @@ func (c Config) Validate() (auto, approved resolution.Budget, err error) {
 	if c.Label.Approved == "" {
 		errs = append(errs, errors.New("label.approved is required"))
 	}
-	auto, e := c.Budget.Auto.budget("auto")
+	var e error
+	b.Auto, e = c.Budget.Auto.budget("auto")
 	errs = append(errs, e)
-	approved, e = c.Budget.Approved.budget("approved")
+	b.Approved, e = c.Budget.Approved.budget("approved")
 	errs = append(errs, e)
-	return auto, approved, errors.Join(errs...)
+	if c.Upkeep.Enabled {
+		b.UpkeepEnabled = true
+		if c.Upkeep.DependabotLogin == "" {
+			errs = append(errs, errors.New("upkeep.dependabot_login is required"))
+		}
+		if c.Upkeep.RoundCap < 1 {
+			errs = append(errs, errors.New("upkeep.round_cap must be at least 1"))
+		}
+		b.RoundCap = c.Upkeep.RoundCap
+		b.CheckWindow, e = parseDuration("upkeep.check_window", c.Upkeep.CheckWindow)
+		errs = append(errs, e)
+		b.Repair, e = c.Upkeep.Budget.budget("upkeep.budget")
+		errs = append(errs, e)
+	}
+	return b, errors.Join(errs...)
 }
 
+// parseDuration reports the field name with the failure, so an operator
+// reading the log knows which line of the file to fix.
+func parseDuration(field, v string) (time.Duration, error) {
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", field, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%s must be positive", field)
+	}
+	return d, nil
+}
+
+// budget turns one tier into a domain budget. name is the file path of the
+// tier, reported with any failure so an operator knows which line to fix.
+// Upkeep passes its own already-qualified name ("upkeep.budget"); the
+// Resolution tiers pass a bare one and get the "budget." prefix.
 func (t BudgetTier) budget(name string) (resolution.Budget, error) {
+	label := name
+	if !strings.Contains(name, ".") {
+		label = "budget." + name
+	}
 	wall, err := time.ParseDuration(t.WallClock)
 	if err != nil {
-		return resolution.Budget{}, fmt.Errorf("budget.%s.wall_clock: %w", name, err)
+		return resolution.Budget{}, fmt.Errorf("%s.wall_clock: %w", label, err)
 	}
 	b, err := resolution.NewBudget(t.Turns, wall, t.DiffLines)
 	if err != nil {
-		return resolution.Budget{}, fmt.Errorf("budget.%s: %w", name, err)
+		return resolution.Budget{}, fmt.Errorf("%s: %w", label, err)
 	}
 	return b, nil
 }

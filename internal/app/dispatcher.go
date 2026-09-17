@@ -45,6 +45,12 @@ type Dispatcher struct {
 	Commenter  *Commenter
 	Enrollment *Enrollment
 	Recovery   *Recovery
+	// The Upkeep half. All three are nil when upkeep.enabled is false, and
+	// the sweep simply has fewer steps: a daemon running on issues alone
+	// behaves exactly as it did before dependabot existed.
+	RepairScheduler   *RepairScheduler
+	StaleCheckSweeper *StaleCheckSweeper
+	BumpRecovery      *BumpRecovery
 	// Canceller cancels the attempt of a case the issue-closed webhook
 	// closed out from under it. Nil disables the step, which the tests that
 	// do not care about it rely on.
@@ -122,12 +128,20 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	if err := d.Recovery.Run(ctx); err != nil {
 		return err
 	}
+	if d.BumpRecovery != nil {
+		if err := d.BumpRecovery.Run(ctx); err != nil {
+			return err
+		}
+	}
 	d.Sweep(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			if !d.Scheduler.WaitTimeout(ShutdownWait) {
 				log.Printf("shutdown: gave up after %s on running attempts: %s", ShutdownWait, strings.Join(d.Scheduler.Running(), ", "))
+			}
+			if d.RepairScheduler != nil && !d.RepairScheduler.WaitTimeout(ShutdownWait) {
+				log.Printf("shutdown: gave up after %s on running repair rounds: %s", ShutdownWait, strings.Join(d.RepairScheduler.Running(), ", "))
 			}
 			return nil
 		case <-d.wake:
@@ -151,6 +165,22 @@ func (d *Dispatcher) Sweep(ctx context.Context) {
 		{"triage", d.Triage.Run},
 		{"comment", d.Commenter.Run},
 		{"schedule", d.Scheduler.Run},
+	}
+	if d.StaleCheckSweeper != nil {
+		steps = append(steps, struct {
+			name string
+			run  func(context.Context) error
+		}{"stale-checks", d.StaleCheckSweeper.Run})
+	}
+	if d.RepairScheduler != nil {
+		// Last, so an issue attempt and a repair round competing for the
+		// last sandbox slot resolve the same way every sweep rather than by
+		// map order. It is a tie-break, not a priority scheme; ADR 0007
+		// records that nothing really arbitrates between the two.
+		steps = append(steps, struct {
+			name string
+			run  func(context.Context) error
+		}{"repair", d.RepairScheduler.Run})
 	}
 	m := d.metrics()
 	m.Sweep()

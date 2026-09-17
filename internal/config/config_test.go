@@ -17,19 +17,19 @@ func complete() Config {
 }
 
 func TestValidateComplete(t *testing.T) {
-	auto, approved, err := complete().Validate()
+	b, err := complete().Validate()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if auto.MaxTurns() != 40 || approved.MaxTurns() != 150 {
-		t.Errorf("budgets = %d %d", auto.MaxTurns(), approved.MaxTurns())
+	if b.Auto.MaxTurns() != 40 || b.Approved.MaxTurns() != 150 {
+		t.Errorf("budgets = %d %d", b.Auto.MaxTurns(), b.Approved.MaxTurns())
 	}
 }
 
 func TestValidateReportsEveryMissingField(t *testing.T) {
 	c := Default()
 	c.Budget.Auto.WallClock = "soon"
-	_, _, err := c.Validate()
+	_, err := c.Validate()
 	if err == nil {
 		t.Fatal("empty config validated")
 	}

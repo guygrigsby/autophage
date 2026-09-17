@@ -27,7 +27,7 @@ func checksServer(t *testing.T, status map[string]any, runs map[string]any) *htt
 	})
 	mux.HandleFunc("GET /repos/guy/repo/pulls/11", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"number": 11, "state": "open", "merged": false,
+			"number": 11, "state": "open", "merged": false, "title": "Bump y from 1.2.2 to 1.2.3",
 			"user": map[string]any{"login": "dependabot[bot]"},
 			"head": map[string]any{"ref": "dependabot/x", "sha": headA},
 			"base": map[string]any{"ref": "main"},
@@ -175,6 +175,9 @@ func TestGetPullRequestReadsTheHead(t *testing.T) {
 	}
 	if pr.HeadSha != headA || pr.HeadBranch != "dependabot/x" || pr.BaseBranch != "main" {
 		t.Errorf("pull request = %+v", pr)
+	}
+	if pr.Title != "Bump y from 1.2.2 to 1.2.3" {
+		t.Errorf("title = %q", pr.Title)
 	}
 	if pr.AuthorLogin != "dependabot[bot]" || !pr.Open || pr.Merged {
 		t.Errorf("pull request = %+v", pr)

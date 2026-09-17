@@ -17,6 +17,10 @@ var ErrPullRequestNotFound = errors.New("pull request not found")
 
 // PullRequestDetail is what Upkeep needs from GitHub about one pull request.
 type PullRequestDetail struct {
+	// Title is dependabot's own text, quoted into the repair brief inside a
+	// fence. Untrusted: a version string is influenced by whoever publishes
+	// the package.
+	Title       string
 	HeadBranch  string
 	HeadSha     string
 	BaseBranch  string
@@ -40,6 +44,7 @@ func (c *Client) GetPullRequest(ctx context.Context, repository string, number i
 		return PullRequestDetail{}, fmt.Errorf("github: get pull request %s#%d: %w", repository, number, err)
 	}
 	return PullRequestDetail{
+		Title:       pr.GetTitle(),
 		HeadBranch:  pr.GetHead().GetRef(),
 		HeadSha:     pr.GetHead().GetSHA(),
 		BaseBranch:  pr.GetBase().GetRef(),

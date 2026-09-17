@@ -37,7 +37,7 @@ func main() {
 	if err := config.Load("autophage", &cfg); err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	autoBudget, approvedBudget, err := cfg.Validate()
+	budgets, err := cfg.Validate()
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
@@ -91,10 +91,11 @@ func main() {
 		Logf:          log.Printf,
 		Metrics:       api.RunnerMetrics{},
 	}
-	scheduler := &app.Scheduler{Store: st, Runner: runner, Concurrency: cfg.Sandbox.Concurrency, Clock: clock, Budgets: app.BudgetPolicy{Auto: autoBudget, Approved: approvedBudget}, GitHub: gh}
+	translator := &github.Translator{Store: st, Clock: clock, ApprovedLabel: cfg.Label.Approved, BotLogin: cfg.GitHub.BotLogin, Metrics: api.TranslateMetrics{}}
+	scheduler := &app.Scheduler{Store: st, Runner: runner, Concurrency: cfg.Sandbox.Concurrency, Clock: clock, Budgets: app.BudgetPolicy{Auto: budgets.Auto, Approved: budgets.Approved, Repair: budgets.Repair}, GitHub: gh}
 	dispatcher := &app.Dispatcher{
 		Store:      st,
-		Translator: &github.Translator{Store: st, Clock: clock, ApprovedLabel: cfg.Label.Approved, BotLogin: cfg.GitHub.BotLogin, Metrics: api.TranslateMetrics{}},
+		Translator: translator,
 		Triage:     &app.Triage{Store: st, Triager: runner.Triager(), GitHub: gh, Clock: clock, Model: cfg.Model.Triage.Model, Metrics: api.TriageMetrics{}},
 		Scheduler:  scheduler,
 		Commenter:  &app.Commenter{Store: st, GitHub: gh, Label: cfg.Label.Approved, Metrics: api.CommentMetrics{}},
@@ -102,6 +103,19 @@ func main() {
 		Recovery:   &app.Recovery{Store: st, Clock: clock},
 		Canceller:  runner,
 		Metrics:    api.SweepMetrics{},
+	}
+	if budgets.UpkeepEnabled {
+		// Wiring Rollup is what turns the three Upkeep events on: without it
+		// the translator ignores them and nothing else here is reachable.
+		translator.DependabotLogin = cfg.Upkeep.DependabotLogin
+		translator.Rollup = gh
+		translator.RoundCap = budgets.RoundCap
+		dispatcher.StaleCheckSweeper = &app.StaleCheckSweeper{Store: st, Clock: clock, Window: budgets.CheckWindow}
+		dispatcher.BumpRecovery = &app.BumpRecovery{Store: st, Clock: clock, RoundCap: budgets.RoundCap}
+		// RepairScheduler stays nil until the agent repair runner lands
+		// (autophage-am9). Until then a red bump is recorded, queued and
+		// visible, and nothing repairs it.
+		log.Printf("upkeep: on for dependabot pull requests (round cap %d, check window %s); repair rounds are not wired yet", budgets.RoundCap, budgets.CheckWindow)
 	}
 
 	handler := api.New(dir, rootapp.Static(), api.Deps{

@@ -13,10 +13,14 @@ import (
 	"github.com/guygrigsby/autophage/internal/store"
 )
 
-// BudgetPolicy is the two named budgets from config.
+// BudgetPolicy is the named budgets from config.
 type BudgetPolicy struct {
 	Auto     resolution.Budget
 	Approved resolution.Budget
+	// Repair is Upkeep's tier. A repair round reads a failing check and a
+	// diff that already exists rather than writing a fix from a description,
+	// so it is its own number rather than a reuse of Auto.
+	Repair resolution.Budget
 }
 
 // For picks the budget for an attempt kind.
@@ -47,13 +51,12 @@ type Scheduler struct {
 // Run starts attempts for Queued cases until the concurrency limit is
 // reached. Each started attempt runs on its own goroutine through Runner.
 func (s *Scheduler) Run(ctx context.Context) error {
-	open, err := s.Store.OpenAttempts(ctx)
-	if err != nil {
+	// Repair rounds are counted too: one sandbox pool serves both halves,
+	// so counting only issue attempts would oversubscribe it by exactly the
+	// number of rounds running.
+	slots, err := freeSlots(ctx, s.Store, s.Concurrency)
+	if err != nil || slots <= 0 {
 		return err
-	}
-	slots := s.Concurrency - len(open)
-	if slots <= 0 {
-		return nil
 	}
 	queued, err := s.Store.QueuedCases(ctx)
 	if err != nil {
