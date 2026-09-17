@@ -10,6 +10,7 @@ import (
 	"github.com/guygrigsby/autophage/internal/github"
 	"github.com/guygrigsby/autophage/internal/resolution"
 	"github.com/guygrigsby/autophage/internal/store"
+	"github.com/guygrigsby/autophage/internal/upkeep"
 )
 
 // defaultFloor is how long the dispatcher will go without a sweep. Every
@@ -34,6 +35,13 @@ type Canceller interface {
 	Cancel(attemptID string, reason resolution.AbortReason) bool
 }
 
+// RepairCanceller cancels a running repair round; the Repairer implements
+// it. Separate from Canceller because the abort vocabularies are separate:
+// issue_closed means nothing to a bump.
+type RepairCanceller interface {
+	Cancel(repairID string, reason upkeep.RepairAbortReason) bool
+}
+
 // Dispatcher runs recovery once, sweeps every service, then sweeps again on
 // every store notification and at least once per Floor. Sweeps never
 // overlap; wake-ups that arrive during a sweep coalesce into one more.
@@ -55,6 +63,9 @@ type Dispatcher struct {
 	// closed out from under it. Nil disables the step, which the tests that
 	// do not care about it rely on.
 	Canceller Canceller
+	// RepairCanceller is the same thing for a round whose pull request
+	// closed under it. Nil disables the step.
+	RepairCanceller RepairCanceller
 	// Floor is the cadence that makes every "will retry" true. Zero means
 	// defaultFloor.
 	Floor time.Duration
@@ -172,6 +183,12 @@ func (d *Dispatcher) Sweep(ctx context.Context) {
 			run  func(context.Context) error
 		}{"stale-checks", d.StaleCheckSweeper.Run})
 	}
+	if d.RepairCanceller != nil {
+		steps = append(steps, struct {
+			name string
+			run  func(context.Context) error
+		}{"cancel-repairs", d.cancelClosedBumps})
+	}
 	if d.RepairScheduler != nil {
 		// Last, so an issue attempt and a repair round competing for the
 		// last sandbox slot resolve the same way every sweep rather than by
@@ -211,6 +228,22 @@ func (d *Dispatcher) cancelClosed(ctx context.Context) error {
 	for _, id := range ids {
 		if !d.Canceller.Cancel(id, resolution.AbortIssueClosed) {
 			log.Printf("cancel %s: not running here", id)
+		}
+	}
+	return nil
+}
+
+// cancelClosedBumps cancels every round still running on a bump whose pull
+// request has closed. A closed bump cannot move again, so the round would
+// spend turns and tokens on an outcome nothing will read.
+func (d *Dispatcher) cancelClosedBumps(ctx context.Context) error {
+	ids, err := d.Store.OpenRepairsOnClosedBumps(ctx)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if !d.RepairCanceller.Cancel(id, upkeep.AbortPullRequestClosed) {
+			log.Printf("cancel repair %s: not running here", id)
 		}
 	}
 	return nil

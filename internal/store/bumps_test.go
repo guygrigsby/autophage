@@ -381,3 +381,52 @@ func TestOpenRepairsRecoverAfterRestart(t *testing.T) {
 		t.Errorf("open round = %+v", open[0])
 	}
 }
+
+// A round still running on a bump whose pull request closed is spending
+// turns and tokens on an outcome nothing will read.
+func TestOpenRepairsOnClosedBumps(t *testing.T) {
+	s := storetest.Open(t)
+	watched(t, s, "guy/repo")
+	ctx := t.Context()
+	b := createBump(t, s, "guy/repo", 7)
+	v := upkeep.CheckVerdict{HeadSha: bumpSha1, Conclusion: upkeep.CheckFailure, FailingContexts: "test", ConcludedAt: t0.Add(time.Minute)}
+	if _, err := s.UpdateBump(ctx, "guy/repo", 7, func(b *upkeep.Bump) error { return b.RecordVerdict(v, bumpCap) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateBump(ctx, "guy/repo", 7, func(b *upkeep.Bump) error {
+		_, err := b.StartRepair(bumpBudget(t), "fix it", t0.Add(2*time.Minute), bumpCap)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := s.OpenRepairsOnClosedBumps(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("ids = %v, want none while the bump is open", ids)
+	}
+	if err := s.StoreDeliveryForTest(ctx, "d-close"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateBump(ctx, "guy/repo", 7, func(b *upkeep.Bump) error {
+		return b.Close(upkeep.BumpClosure{Kind: upkeep.Discarded, DeliveryID: "d-close", ClosedAt: t0.Add(3 * time.Minute)})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ids, err = s.OpenRepairsOnClosedBumps(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("ids = %v, want the one open round", ids)
+	}
+	open, err := s.OpenRepairs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids[0] != open[0].ID {
+		t.Errorf("id = %s, want the open round %s", ids[0], open[0].ID)
+	}
+	_ = b
+}

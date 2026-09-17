@@ -77,12 +77,17 @@ func main() {
 		log.Fatalf("ledger: %v", err)
 	}
 	clock := resolution.SystemClock{}
+	// One sandbox manager and one model factory, shared by the issue runner
+	// and the repair runner: they contend for the same workspace locks and
+	// the same pool, which only works if it is literally the same manager.
+	sb := &sandbox.Manager{Image: cfg.Sandbox.Image, WorkspacesDir: expandHome(cfg.Sandbox.WorkspacesDir), Memory: "4g", CPUs: "4", Pids: 512,
+		BotName: cfg.GitHub.BotLogin, BotEmail: strings.TrimSuffix(cfg.GitHub.BotLogin, "[bot]") + "[bot]@users.noreply.github.com", Logf: log.Printf}
+	models := agent.Models{Key: secrets.OpenRouterKey, Title: "autophage", Metrics: api.ModelMetrics{}}
 	runner := &agent.Runner{
-		Store:  st,
-		GitHub: gh,
-		Sandbox: &sandbox.Manager{Image: cfg.Sandbox.Image, WorkspacesDir: expandHome(cfg.Sandbox.WorkspacesDir), Memory: "4g", CPUs: "4", Pids: 512,
-			BotName: cfg.GitHub.BotLogin, BotEmail: strings.TrimSuffix(cfg.GitHub.BotLogin, "[bot]") + "[bot]@users.noreply.github.com", Logf: log.Printf},
-		Models:        agent.Models{Key: secrets.OpenRouterKey, Title: "autophage", Metrics: api.ModelMetrics{}},
+		Store:         st,
+		GitHub:        gh,
+		Sandbox:       sb,
+		Models:        models,
 		AttemptModel:  cfg.Model.Auto.Model,
 		ApprovedModel: cfg.Model.Approved.Model,
 		TriageModel:   cfg.Model.Triage.Model,
@@ -112,10 +117,17 @@ func main() {
 		translator.RoundCap = budgets.RoundCap
 		dispatcher.StaleCheckSweeper = &app.StaleCheckSweeper{Store: st, Clock: clock, Window: budgets.CheckWindow}
 		dispatcher.BumpRecovery = &app.BumpRecovery{Store: st, Clock: clock, RoundCap: budgets.RoundCap}
-		// RepairScheduler stays nil until the agent repair runner lands
-		// (autophage-am9). Until then a red bump is recorded, queued and
-		// visible, and nothing repairs it.
-		log.Printf("upkeep: on for dependabot pull requests (round cap %d, check window %s); repair rounds are not wired yet", budgets.RoundCap, budgets.CheckWindow)
+		repairer := &agent.Repairer{
+			Store: st, GitHub: gh, Sandbox: sb, Models: models,
+			Model: cfg.Model.Auto.Model, RoundCap: budgets.RoundCap,
+			Ledger: pg, Clock: clock, Logf: log.Printf, Metrics: api.RunnerMetrics{},
+		}
+		dispatcher.RepairScheduler = &app.RepairScheduler{
+			Store: st, Runner: repairer, GitHub: gh, Concurrency: cfg.Sandbox.Concurrency,
+			Clock: clock, Budgets: app.BudgetPolicy{Repair: budgets.Repair}, RoundCap: budgets.RoundCap,
+		}
+		dispatcher.RepairCanceller = repairer
+		log.Printf("upkeep: on for dependabot pull requests (round cap %d, check window %s)", budgets.RoundCap, budgets.CheckWindow)
 	}
 
 	handler := api.New(dir, rootapp.Static(), api.Deps{

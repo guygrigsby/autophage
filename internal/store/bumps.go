@@ -331,3 +331,28 @@ func (s *Store) OpenRepairs(ctx context.Context) ([]OpenRepair, error) {
 	}
 	return out, rows.Err()
 }
+
+// OpenRepairsOnClosedBumps lists rounds still running on a bump whose pull
+// request has closed. A closed bump can never move again, so a round left
+// running would spend turns and tokens on an outcome nothing will read.
+func (s *Store) OpenRepairsOnClosedBumps(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `select r.id
+		from bump_repairs r
+		join bumps b on b.id = r.bump_id
+		left join bump_repair_outcomes o on o.repair_id = r.id
+		where o.repair_id is null and b.state = 'closed'
+		order by r.started_at, r.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
