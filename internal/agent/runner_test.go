@@ -94,6 +94,19 @@ func (f *fakeSandbox) Prepare(ctx context.Context, repo, cloneURL, branch, def, 
 	return sandbox.Workspace{Path: "/tmp/x", Repository: repo, CloneURL: cloneURL, Branch: branch, DefaultBranch: def, BaseSha: baseSha}, nil
 }
 
+// PrepareHead is Upkeep's pinned checkout. The issue runner never calls it;
+// it is here because both halves share one Sandbox port.
+func (f *fakeSandbox) PrepareHead(_ context.Context, repo, cloneURL, branch, headSha, token string) (sandbox.Workspace, error) {
+	if token == "" {
+		return sandbox.Workspace{}, errors.New("no token")
+	}
+	f.mu.Lock()
+	f.calls = append(f.calls, "prepare-head")
+	f.prepared = append(f.prepared, repo+" "+cloneURL+" "+branch+" "+headSha)
+	f.mu.Unlock()
+	return sandbox.Workspace{Path: "/tmp/x", Repository: repo, CloneURL: cloneURL, Branch: branch, BaseSha: headSha, RemoteHead: headSha}, nil
+}
+
 func (f *fakeSandbox) Start(_ context.Context, ws sandbox.Workspace, id string) (sandbox.Container, error) {
 	if f.failStart {
 		return sandbox.Container{}, errors.New("podman: image missing")

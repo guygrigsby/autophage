@@ -75,6 +75,9 @@ type Container struct {
 // same call made.
 type Sandbox interface {
 	Prepare(ctx context.Context, repository, cloneURL, branch, defaultBranch, token string) (Workspace, error)
+	// PrepareHead is Prepare pinned to one exact sha, for a branch
+	// autophage did not create. See head.go for why it does not rebase.
+	PrepareHead(ctx context.Context, repository, cloneURL, branch, headSha, token string) (Workspace, error)
 	Start(ctx context.Context, ws Workspace, attemptID string) (Container, error)
 	Tools(ctx context.Context, c Container) ([]ac.Tool, io.Closer, error)
 	DiffLines(ctx context.Context, c Container, baseSha string) (int, error)
