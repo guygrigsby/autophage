@@ -1,0 +1,14 @@
+{
+  "action": "completed",
+  "workflow_run": {
+    "id": 900002,
+    "status": "completed",
+    "conclusion": "success",
+    "head_branch": "dependabot/go_modules/golang.org/x/net-0.38.0",
+    "head_sha": "1111111111111111111111111111111111111111",
+    "pull_requests": [{"number": 11}]
+  },
+  "repository": {"full_name": "guy/repo", "default_branch": "main"},
+  "sender": {"login": "github-actions[bot]"},
+  "installation": {"id": 42}
+}

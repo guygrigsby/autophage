@@ -1,0 +1,16 @@
+{
+  "action": "opened",
+  "number": 12,
+  "pull_request": {
+    "number": 12,
+    "state": "open",
+    "merged": false,
+    "title": "Add a feature",
+    "user": {"login": "guy"},
+    "head": {"ref": "feature/thing", "sha": "3333333333333333333333333333333333333333"},
+    "base": {"ref": "main"}
+  },
+  "repository": {"full_name": "guy/repo", "default_branch": "main"},
+  "sender": {"login": "guy"},
+  "installation": {"id": 42}
+}

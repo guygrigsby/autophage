@@ -86,7 +86,8 @@ Register at `github.com/settings/apps/new`, named `autophage`:
 - Webhook URL: `https://<host>.<tailnet>.ts.net/webhook/github`
 - Webhook secret: generate one, do not reuse elsewhere
 - Permissions: contents write, issues write, pull requests write, metadata read
-- Subscribe to events: issues, installation, installation_repositories
+- Subscribe to events: issues, installation, installation_repositories,
+  pull_request, check_suite, workflow_run
 
 Download the private key, then move it onto <host>:
 
@@ -96,6 +97,11 @@ ssh <host> chmod 0600 ~/.config/autophage/app.pem
 ```
 
 Note the App id and the bot login (`autophage[bot]`) for step 6.
+
+The last three are Upkeep's (dependabot bumps). The permissions above already
+cover them: pushing a repair to dependabot's branch is contents write, which
+the App has. Leave them unsubscribed to run autophage on issues alone; the
+daemon treats an unwired rollup as Upkeep being off and ignores the events.
 
 **Verify:** the App's "Permissions & events" page must list Issues under
 subscribed events, or GitHub never delivers an issue (the installation

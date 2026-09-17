@@ -19,6 +19,17 @@ type Translator struct {
 	Clock         resolution.Clock
 	ApprovedLabel string
 	BotLogin      string
+	// DependabotLogin is the only author whose pull requests become bumps.
+	// Trust in Upkeep is identity, not author_association: dependabot's is
+	// NONE, which the Case-side gate would read as untrusted, and there is
+	// no person here for an association to be a statement about.
+	DependabotLogin string
+	// Rollup reads the combined check state for a head sha. Nil means the
+	// Upkeep half is not wired and check events are ignored.
+	Rollup Roller
+	// RoundCap is how many repair rounds a bump may spend before it is
+	// abandoned, before operator retry grants.
+	RoundCap int
 	// Metrics counts each processing row. Nil is NopTranslateMetrics.
 	Metrics TranslateMetrics
 }
@@ -77,6 +88,29 @@ func (t *Translator) translate(ctx context.Context, d store.Delivery) (result, d
 	switch e := ev.(type) {
 	case *gh.IssuesEvent:
 		detail, cmdErr = t.issue(ctx, d, e)
+	case *gh.PullRequestEvent:
+		if t.Rollup == nil {
+			return "ignored", "upkeep not wired"
+		}
+		detail, cmdErr = t.pullRequest(ctx, d, e)
+	case *gh.CheckSuiteEvent:
+		if t.Rollup == nil {
+			return "ignored", "upkeep not wired"
+		}
+		if e.GetAction() != "completed" {
+			return "ignored", fmt.Sprintf("check_suite.%s", e.GetAction())
+		}
+		cs := e.GetCheckSuite()
+		detail, cmdErr = t.checks(ctx, e.GetRepo().GetFullName(), cs.GetHeadSHA(), prNumbers(cs.PullRequests))
+	case *gh.WorkflowRunEvent:
+		if t.Rollup == nil {
+			return "ignored", "upkeep not wired"
+		}
+		if e.GetAction() != "completed" {
+			return "ignored", fmt.Sprintf("workflow_run.%s", e.GetAction())
+		}
+		wr := e.GetWorkflowRun()
+		detail, cmdErr = t.checks(ctx, e.GetRepo().GetFullName(), wr.GetHeadSHA(), prNumbers(wr.PullRequests))
 	case *gh.InstallationEvent:
 		detail, cmdErr = t.installation(ctx, e)
 	case *gh.InstallationRepositoriesEvent:
