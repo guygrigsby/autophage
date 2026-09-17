@@ -43,11 +43,16 @@ func (h *handlers) status(w http.ResponseWriter, r *http.Request) {
 	} else if ok {
 		lastDelivery = at
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"version": h.d.Version, "uptime_s": int(h.d.Clock.Now().Sub(h.d.StartedAt).Seconds()),
 		"cases_by_state": counts, "attempting": attempting, "queue_depth": len(queued), "concurrency": h.d.Concurrency,
 		"pending_deliveries": len(pending), "last_delivery_at": lastDelivery,
-	})
+	}
+	if err := h.upkeepStatus(ctx, out); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *handlers) listCases(w http.ResponseWriter, r *http.Request) {

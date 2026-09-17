@@ -44,3 +44,35 @@ func (h *handlers) why(w http.ResponseWriter, r *http.Request) {
 		Chain     ledger.Chain `json:"chain"`
 	}{id, runID, chain})
 }
+
+// whyRepair is why for a repair round: the same conformist read of jess's
+// ledger, addressed by the round's run id.
+func (h *handlers) whyRepair(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	b, err := h.d.Store.GetBumpByRepair(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var runID string
+	for _, a := range b.Attempts() {
+		if a.ID == id && a.Run != nil {
+			runID = a.Run.RunID
+		}
+	}
+	if runID == "" || h.d.Ledger == nil {
+		writeErr(w, store.ErrNotFound)
+		return
+	}
+	chain, err := h.d.Ledger.Chain(runID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		RepairID string       `json:"repair_id"`
+		RunID    string       `json:"run_id"`
+		Chain    ledger.Chain `json:"chain"`
+	}{id, runID, chain})
+}

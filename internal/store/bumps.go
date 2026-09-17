@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -353,6 +354,156 @@ func (s *Store) OpenRepairsOnClosedBumps(ctx context.Context) ([]string, error) 
 			return nil, err
 		}
 		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// BumpFilter narrows ListBumps. After is the cursor a previous page
+// returned.
+type BumpFilter struct {
+	State      string
+	Repository string
+	Limit      int
+	After      string
+}
+
+// BumpRow is one line of the operator listing.
+type BumpRow struct {
+	ID               string
+	Repository       string
+	Number           int
+	Branch           string
+	State            string
+	HeadSha          string
+	Rounds           int
+	LatestConclusion string
+	OpenedAt         time.Time
+}
+
+// ListBumps pages bumps newest first by (opened_at, id). The cursor is
+// "<opened_at RFC3339Nano>|<id>" of the last row, exactly as ListCases does.
+func (s *Store) ListBumps(ctx context.Context, f BumpFilter) ([]BumpRow, string, error) {
+	if f.Limit <= 0 {
+		f.Limit = 50
+	}
+	if f.Limit > 500 {
+		f.Limit = 500
+	}
+	var where []string
+	var args []any
+	add := func(clause string, v any) {
+		args = append(args, v)
+		where = append(where, fmt.Sprintf(clause, len(args)))
+	}
+	if f.State != "" {
+		add("b.state = $%d", f.State)
+	}
+	if f.Repository != "" {
+		add("b.repository = $%d", f.Repository)
+	}
+	if f.After != "" {
+		ts, id, ok := strings.Cut(f.After, "|")
+		at, err := time.Parse(time.RFC3339Nano, ts)
+		if !ok || err != nil {
+			return nil, "", ErrBadCursor
+		}
+		args = append(args, at, id)
+		where = append(where, fmt.Sprintf("(b.opened_at, b.id) < ($%d, $%d)", len(args)-1, len(args)))
+	}
+	args = append(args, f.Limit+1)
+	q := `select b.id, b.repository, b.number, b.branch, b.state, b.head_sha, b.opened_at,
+			(select count(*) from bump_repairs r where r.bump_id = b.id),
+			coalesce((select v.conclusion from bump_check_verdicts v where v.bump_id = b.id and v.head_sha = b.head_sha), 'none')
+		from bumps b`
+	if len(where) > 0 {
+		q += " where " + strings.Join(where, " and ")
+	}
+	q += fmt.Sprintf(" order by b.opened_at desc, b.id desc limit $%d", len(args))
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	var out []BumpRow
+	for rows.Next() {
+		var r BumpRow
+		if err := rows.Scan(&r.ID, &r.Repository, &r.Number, &r.Branch, &r.State, &r.HeadSha, &r.OpenedAt, &r.Rounds, &r.LatestConclusion); err != nil {
+			return nil, "", err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	next := ""
+	if len(out) > f.Limit {
+		out = out[:f.Limit]
+		last := out[len(out)-1]
+		next = last.OpenedAt.UTC().Format(time.RFC3339Nano) + "|" + last.ID
+	}
+	return out, next, nil
+}
+
+// CountBumpsByState is the status page's and the metrics endpoint's summary.
+// Every state appears, zero included, so a gauge that drops to zero is
+// published as zero rather than disappearing.
+func (s *Store) CountBumpsByState(ctx context.Context) (map[string]int, error) {
+	out := map[string]int{}
+	for _, st := range upkeep.AllBumpStates() {
+		out[string(st)] = 0
+	}
+	rows, err := s.pool.Query(ctx, `select state, count(*) from bumps group by state`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var state string
+		var n int
+		if err := rows.Scan(&state, &n); err != nil {
+			return nil, err
+		}
+		out[state] = n
+	}
+	return out, rows.Err()
+}
+
+// CountVerdictsByConclusion is the metrics endpoint's summary of what CI has
+// said. Every conclusion appears, zero included.
+func (s *Store) CountVerdictsByConclusion(ctx context.Context) (map[string]int, error) {
+	out := map[string]int{}
+	for _, c := range upkeep.AllCheckConclusions() {
+		out[string(c)] = 0
+	}
+	return s.countInto(ctx, out, `select conclusion, count(*) from bump_check_verdicts group by conclusion`)
+}
+
+// CountAbandonmentsByReason is the metrics endpoint's summary of why
+// autophage gave up. Every reason appears, zero included, so a reason that
+// starts happening is a line that changes rather than a line that appears.
+func (s *Store) CountAbandonmentsByReason(ctx context.Context) (map[string]int, error) {
+	out := map[string]int{}
+	for _, r := range upkeep.AllAbandonReasons() {
+		out[string(r)] = 0
+	}
+	return s.countInto(ctx, out, `select reason, count(*) from bump_abandonments group by reason`)
+}
+
+// countInto runs a two-column "label, count" query over a map pre-seeded
+// with every label the vocabulary allows.
+func (s *Store) countInto(ctx context.Context, out map[string]int, sql string) (map[string]int, error) {
+	rows, err := s.pool.Query(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var label string
+		var n int
+		if err := rows.Scan(&label, &n); err != nil {
+			return nil, err
+		}
+		out[label] = n
 	}
 	return out, rows.Err()
 }

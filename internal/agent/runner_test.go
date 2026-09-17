@@ -260,6 +260,14 @@ func (m *countMetrics) Ended(kind, outcome, stop string, _ resolution.Usage) {
 	m.stops = append(m.stops, stop)
 }
 
+// RepairEnded records a repair round's outcome, in the same list as Ended's
+// so a test can assert on either without knowing which ran.
+func (m *countMetrics) RepairEnded(outcome string, _ resolution.Usage) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ended = append(m.ended, "repair/"+outcome)
+}
+
 // Step records the step name, suffixed "!" when the step failed.
 func (m *countMetrics) Step(step string, _ time.Duration, err error) {
 	m.mu.Lock()

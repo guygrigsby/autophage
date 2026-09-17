@@ -39,6 +39,16 @@ func (RunnerMetrics) Ended(kind, outcome, stop string, u resolution.Usage) {
 	AttemptStops.WithLabelValues(stop).Inc()
 }
 
+// RepairEnded reports one repair round. Its own series, not the attempt
+// ones: a round's turns are not an attempt's turns and averaging them
+// together hides both.
+func (RunnerMetrics) RepairEnded(outcome string, u resolution.Usage) {
+	RepairsTotal.WithLabelValues(outcome).Inc()
+	RepairTokens.WithLabelValues("input").Add(float64(u.InputTokens))
+	RepairTokens.WithLabelValues("output").Add(float64(u.OutputTokens))
+	RepairWallClock.Observe(u.WallClock.Seconds())
+}
+
 // resultOf is the ok or error label for a call that may have failed.
 func resultOf(err error) string {
 	if err != nil {

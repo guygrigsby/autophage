@@ -63,6 +63,30 @@ func metricsHandler(st *store.Store, version string, startedAt time.Time) http.H
 		return float64(len(q))
 	}))
 	reg.MustRegister(&stateCollector{st: st})
+
+	// Upkeep. Published whether or not upkeep is on, so a dashboard reads
+	// zeros rather than gaps and an operator can tell "off" from "broken".
+	reg.MustRegister(RepairsTotal, RepairTokens, RepairWallClock)
+	reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "autophage_repair_queue_depth", Help: "Queued bumps"}, func() float64 {
+		ctx, cancel := scrapeContext()
+		defer cancel()
+		q, err := st.QueuedBumps(ctx)
+		if err != nil {
+			return 0
+		}
+		return float64(len(q))
+	}))
+	reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "autophage_watched_repositories", Help: "Repositories Upkeep acts on"}, func() float64 {
+		ctx, cancel := scrapeContext()
+		defer cancel()
+		w, err := st.WatchedRepositories(ctx)
+		if err != nil {
+			return 0
+		}
+		return float64(len(w))
+	}))
+	reg.MustRegister(&bumpStateCollector{st: st})
+	reg.MustRegister(&bumpFactCollector{st: st})
 	return promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
 }
 
@@ -119,5 +143,61 @@ func (c *stateCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 	for state, n := range counts {
 		ch <- prometheus.MustNewConstMetric(casesDesc, prometheus.GaugeValue, float64(n), state)
+	}
+}
+
+var (
+	RepairsTotal    = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "autophage_repairs_total", Help: "Repair rounds ended, by outcome"}, []string{"outcome"})
+	RepairTokens    = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "autophage_repair_tokens_total", Help: "Model tokens spent on repairs, by direction"}, []string{"direction"})
+	RepairWallClock = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "autophage_repair_wall_clock_seconds", Help: "Repair round wall clock", Buckets: prometheus.ExponentialBuckets(30, 2, 10)})
+)
+
+// bumpStateCollector exposes autophage_bumps{state} from CountBumpsByState.
+type bumpStateCollector struct{ st *store.Store }
+
+var bumpsDesc = prometheus.NewDesc("autophage_bumps", "Bumps by state", []string{"state"}, nil)
+
+func (c *bumpStateCollector) Describe(ch chan<- *prometheus.Desc) { ch <- bumpsDesc }
+
+func (c *bumpStateCollector) Collect(ch chan<- prometheus.Metric) {
+	ctx, cancel := scrapeContext()
+	defer cancel()
+	counts, err := c.st.CountBumpsByState(ctx)
+	if err != nil {
+		return
+	}
+	for state, n := range counts {
+		ch <- prometheus.MustNewConstMetric(bumpsDesc, prometheus.GaugeValue, float64(n), state)
+	}
+}
+
+// bumpFactCollector reads the verdict and abandonment tables on every
+// scrape. Gauges rather than counters on purpose: both facts are rows that
+// outlive the process, so a restart must not reset them the way an
+// in-memory counter would.
+type bumpFactCollector struct{ st *store.Store }
+
+var (
+	verdictsDesc = prometheus.NewDesc("autophage_check_verdicts", "Conclusive check rollups recorded, by conclusion", []string{"conclusion"}, nil)
+	abandonsDesc = prometheus.NewDesc("autophage_bump_abandonments", "Bumps autophage gave up on, by reason", []string{"reason"}, nil)
+)
+
+func (c *bumpFactCollector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- verdictsDesc
+	ch <- abandonsDesc
+}
+
+func (c *bumpFactCollector) Collect(ch chan<- prometheus.Metric) {
+	ctx, cancel := scrapeContext()
+	defer cancel()
+	if counts, err := c.st.CountVerdictsByConclusion(ctx); err == nil {
+		for conclusion, n := range counts {
+			ch <- prometheus.MustNewConstMetric(verdictsDesc, prometheus.GaugeValue, float64(n), conclusion)
+		}
+	}
+	if counts, err := c.st.CountAbandonmentsByReason(ctx); err == nil {
+		for reason, n := range counts {
+			ch <- prometheus.MustNewConstMetric(abandonsDesc, prometheus.GaugeValue, float64(n), reason)
+		}
 	}
 }

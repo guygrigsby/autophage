@@ -172,6 +172,10 @@ func (p *Repairer) Run(ctx context.Context, repairID string) {
 		// The round stays open and the scheduler's backstop closes it.
 		p.logf("repair %s: record outcome: %v", repairID, err)
 	}
+	// Reported whether or not the row landed: the turns and the tokens were
+	// spent either way, and a metric that hides the failed writes is the
+	// wrong shape of missing.
+	p.metrics().RepairEnded(string(outcome.Kind), outcome.Usage)
 }
 
 // execute is the repair pipeline: token, workspace pinned to the failing

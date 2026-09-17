@@ -24,6 +24,10 @@ type Metrics interface {
 	// Ended reports the attempt's outcome. stop is why the run ended, or
 	// "none" when it ended on its own terms.
 	Ended(kind, outcome, stop string, usage resolution.Usage)
+	// RepairEnded reports a repair round's outcome. Separate from Ended
+	// because the two have different label sets: a round has no kind, and
+	// mixing them would put repair turns in the attempt histograms.
+	RepairEnded(outcome string, usage resolution.Usage)
 }
 
 // NopMetrics is the default when a Runner or a RunInput has no Metrics.
@@ -33,6 +37,7 @@ func (NopMetrics) Running(int)                                    {}
 func (NopMetrics) Step(string, time.Duration, error)              {}
 func (NopMetrics) ToolCall(string, time.Duration, error)          {}
 func (NopMetrics) Ended(string, string, string, resolution.Usage) {}
+func (NopMetrics) RepairEnded(string, resolution.Usage)           {}
 
 // ModelMetrics reports one model call: the tokens, latency and cost an
 // adapter's Meter saw, or the error a call returned instead. model is the

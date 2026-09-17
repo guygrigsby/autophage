@@ -109,6 +109,9 @@ func main() {
 		Canceller:  runner,
 		Metrics:    api.SweepMetrics{},
 	}
+	// stopRepair stays nil while upkeep is off, and the stop endpoint then
+	// answers that the round is not running here.
+	var stopRepair func(string) bool
 	if budgets.UpkeepEnabled {
 		// Wiring Rollup is what turns the three Upkeep events on: without it
 		// the translator ignores them and nothing else here is reachable.
@@ -127,13 +130,14 @@ func main() {
 			Clock: clock, Budgets: app.BudgetPolicy{Repair: budgets.Repair}, RoundCap: budgets.RoundCap,
 		}
 		dispatcher.RepairCanceller = repairer
+		stopRepair = repairer.Stop
 		log.Printf("upkeep: on for dependabot pull requests (round cap %d, check window %s)", budgets.RoundCap, budgets.CheckWindow)
 	}
 
 	handler := api.New(dir, rootapp.Static(), api.Deps{
 		Base: ctx, Store: st, GitHub: gh, Clock: clock, OperatorLogin: cfg.GitHub.OperatorLogin,
 		Webhook: github.WebhookHandler(st, secrets.WebhookSecret, clock),
-		Sweep:   dispatcher.Sweep, Ledger: pg, Stop: runner.Stop,
+		Sweep:   dispatcher.Sweep, Ledger: pg, Stop: runner.Stop, StopRepair: stopRepair,
 		Version: version, StartedAt: clock.Now(), Concurrency: cfg.Sandbox.Concurrency,
 	})
 	addr := daemon.ResolveAddr(*addrFlag, "AUTOPHAGE_LISTEN", cfg.Listen)

@@ -36,9 +36,14 @@ type Deps struct {
 	Sweep         func(context.Context)
 	Ledger        ledger.Reader
 	Stop          func(attemptID string) bool
-	Version       string
-	StartedAt     time.Time
-	Concurrency   int
+	// StopRepair cancels a running repair round. Nil when upkeep is off,
+	// which makes the stop endpoint answer that the round is not running
+	// here rather than 404: the round may well exist, just not on a daemon
+	// that can stop it.
+	StopRepair  func(repairID string) bool
+	Version     string
+	StartedAt   time.Time
+	Concurrency int
 }
 
 // New returns the autophaged handler. dir is the per-app config dir (where the auth
@@ -99,6 +104,17 @@ func New(dir string, static fs.FS, d Deps) http.Handler {
 		mux.Handle("GET /api/attempts/{id}", auth.Middleware(dir, http.HandlerFunc(h.getAttempt)))
 		mux.Handle("POST /api/attempts/{id}/stop", auth.Middleware(dir, http.HandlerFunc(h.stop)))
 		mux.Handle("GET /api/attempts/{id}/why", auth.Middleware(dir, http.HandlerFunc(h.why)))
+		mux.Handle("GET /api/bumps", auth.Middleware(dir, http.HandlerFunc(h.listBumps)))
+		mux.Handle("GET /api/bumps/{owner}/{repo}/{number}", auth.Middleware(dir, http.HandlerFunc(h.getBump)))
+		mux.Handle("POST /api/bumps/{owner}/{repo}/{number}/retry", auth.Middleware(dir, http.HandlerFunc(h.retryBump)))
+		mux.Handle("GET /api/repairs/{id}", auth.Middleware(dir, http.HandlerFunc(h.getRepair)))
+		mux.Handle("POST /api/repairs/{id}/stop", auth.Middleware(dir, http.HandlerFunc(h.stopRepair)))
+		mux.Handle("GET /api/repairs/{id}/why", auth.Middleware(dir, http.HandlerFunc(h.whyRepair)))
+		// POST for both, matching /run and /stop rather than PUT and
+		// DELETE: every other action in this API is a POST, and perch's
+		// client speaks GET and POST only.
+		mux.Handle("POST /api/repositories/{owner}/{repo}/watch", auth.Middleware(dir, http.HandlerFunc(h.watch)))
+		mux.Handle("POST /api/repositories/{owner}/{repo}/unwatch", auth.Middleware(dir, http.HandlerFunc(h.unwatch)))
 		mux.Handle("GET /metrics", metricsHandler(d.Store, d.Version, d.StartedAt))
 	}
 
