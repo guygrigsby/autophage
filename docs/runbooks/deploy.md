@@ -224,6 +224,51 @@ ssh <host> 'cd ~/projects/autophage && ./autophage why <attempt-id>'
 
 Prints the jess ledger chain for that attempt.
 
+## 9a. Dependabot bumps (operator, optional)
+
+Off unless the config says otherwise, because turning it on lets autophage
+push to branches it did not create. Add to `config.toml` on the host:
+
+```toml
+[upkeep]
+enabled = true
+```
+
+The defaults are `dependabot_login = "dependabot[bot]"`, `round_cap = 3`,
+`check_window = "6h"` and a repair budget of 25 turns, 30m, 300 diff lines.
+Restart the daemon; the log says `upkeep: on for dependabot pull requests`.
+
+Enrollment authorises issues. Bumps need a second, explicit opt-in per
+repository, so a rollout is incremental:
+
+```bash
+ssh <host> 'cd ~/projects/autophage && ./autophage watch <owner>/<repo>'
+```
+
+**Verify:** the next dependabot pull request on that repository appears, and
+its checks land as a verdict.
+
+```bash
+ssh <host> 'cd ~/projects/autophage && ./autophage bumps'
+ssh <host> 'cd ~/projects/autophage && ./autophage bump <owner>/<repo>#<N>'
+```
+
+Expect `awaiting_checks`, then `green` if CI passes or `queued` then
+`repairing` if it does not. A repair round pushes to dependabot's branch and
+the bump returns to `awaiting_checks` on the new head. Autophage never
+merges: a green bump is yours to merge.
+
+`./autophage why` is for issue attempts; a repair round's ledger is
+`./autophage bump <ref>` for the round id, then
+`GET /api/repairs/<id>/why`. `./autophage stop-repair <id>` stops one, and
+`./autophage retry <owner>/<repo>#<N>` is the only way to undo an
+abandonment. `./autophage unwatch <owner>/<repo>` stops new bumps and leaves
+the open ones alone.
+
+A repository whose pull requests run no checks at all will see every bump
+abandoned `checks_never_concluded` after the window: that is working as
+designed, not a fault, and the fix is to not watch that repository.
+
 ## 10. Metrics (operator on the Prometheus host)
 
 `/metrics` is served by the tailnet service name, never from the node's
