@@ -90,9 +90,6 @@ type Manager struct {
 	Podman        string // binary, default "podman"
 	Image         string
 	WorkspacesDir string
-	Memory        string // e.g. "4g"
-	CPUs          string // e.g. "4"
-	Pids          int    // e.g. 512
 	BotName       string // git identity for commits
 	BotEmail      string
 	Logf          func(string, ...any)

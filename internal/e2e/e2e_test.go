@@ -230,7 +230,7 @@ func TestEndToEnd(t *testing.T) {
 	runner := &agent.Runner{
 		Store:  st,
 		GitHub: gh,
-		Sandbox: &sandbox.Manager{Podman: podmanBin, Image: image, WorkspacesDir: t.TempDir(), Memory: "2g", CPUs: "2", Pids: 512,
+		Sandbox: &sandbox.Manager{Podman: podmanBin, Image: image, WorkspacesDir: t.TempDir(),
 			BotName: "autophage[bot]", BotEmail: "autophage[bot]@users.noreply.github.com", Logf: logs.logf},
 		AttemptModel:  "scripted/auto",
 		ApprovedModel: "scripted/approved",

@@ -80,7 +80,7 @@ func main() {
 	// One sandbox manager and one model factory, shared by the issue runner
 	// and the repair runner: they contend for the same workspace locks and
 	// the same pool, which only works if it is literally the same manager.
-	sb := &sandbox.Manager{Image: cfg.Sandbox.Image, WorkspacesDir: expandHome(cfg.Sandbox.WorkspacesDir), Memory: "4g", CPUs: "4", Pids: 512,
+	sb := &sandbox.Manager{Image: cfg.Sandbox.Image, WorkspacesDir: expandHome(cfg.Sandbox.WorkspacesDir),
 		BotName: cfg.GitHub.BotLogin, BotEmail: strings.TrimSuffix(cfg.GitHub.BotLogin, "[bot]") + "[bot]@users.noreply.github.com", Logf: log.Printf}
 	models := agent.Models{Key: secrets.OpenRouterKey, Title: "autophage", Metrics: api.ModelMetrics{}}
 	runner := &agent.Runner{

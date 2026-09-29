@@ -60,3 +60,21 @@ Also accepted: memory, cpu and pids are bounded per container, disk is not. An
 attempt can fill the host's disk from `bash`, and the caches it fills are read
 by the next attempt on the same repository. Quotas and a cache-discard policy
 are tracked as beads issue `autophage-7d4`.
+
+## 2026-09-29: resource limits removed
+
+The per-container memory, cpu and pids limits (and the tmpfs size caps on
+/tmp and /home/agent) are gone. A real attempt (rudy#10) starved inside
+them: 4g of memory, 4 cpus and 512 pids is not enough headroom for a
+toolchain-heavy fix — Go and Node builds plus their test suites — so the
+agent ran out of resources on the first shot and the boundary bought a
+failed attempt rather than containment.
+
+The container remains the security boundary; the other hardening stands
+(no network, no capabilities, no new privileges, read-only root, fresh
+container per attempt, hard wall-clock kill from the budget). The residual
+is unchanged in kind from the disk residual below: a runaway attempt can
+now contend for host memory, cpu and pids rather than being cut off,
+bounded only by the attempt wall clock. Reinstate as config-driven
+ceilings rather than hardcoded constants if that bites; tracked alongside
+`autophage-7d4`.

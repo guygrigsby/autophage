@@ -60,9 +60,10 @@ func cacheVolumes(repository string) []string {
 // root with mode 0755, which leaves the agent user unable to write to its own
 // $HOME: npm, uv, go and every tool that keeps state there then fails on a
 // read-only root filesystem with nowhere else to go. U=true chowns the mount
-// to the container user, and 0700 keeps it private. The size is in bytes
-// (256m) because the --mount form takes no suffix.
-const agentHomeMount = "type=tmpfs,destination=/home/agent,tmpfs-size=268435456,tmpfs-mode=0700,U=true"
+// to the container user, and 0700 keeps it private. The mount carries no
+// size: an attempt that needs more home than the host has is a daemon bug to
+// fix, not a resource to ration (limits starved real attempts; see rudy#10).
+const agentHomeMount = "type=tmpfs,destination=/home/agent,tmpfs-mode=0700,U=true"
 
 // userns maps the daemon's own host uid onto the image's agent user
 // (uid 1000, gid 1000) rather than onto whatever uid the daemon happens to
@@ -70,22 +71,6 @@ const agentHomeMount = "type=tmpfs,destination=/home/agent,tmpfs-size=268435456,
 // container, which is only uid 1000 by luck: on any other host uid the
 // agent user's home, caches and /work ownership would all be wrong.
 const userns = "--userns=keep-id:uid=1000,gid=1000"
-
-// resourceLimitArgs builds the --memory/--cpus/--pids-limit flags shared by
-// the prep and agent containers, omitting whichever the Manager left unset.
-func (m *Manager) resourceLimitArgs() []string {
-	var args []string
-	if m.Memory != "" {
-		args = append(args, "--memory", m.Memory)
-	}
-	if m.CPUs != "" {
-		args = append(args, "--cpus", m.CPUs)
-	}
-	if m.Pids > 0 {
-		args = append(args, "--pids-limit", strconv.Itoa(m.Pids))
-	}
-	return args
-}
 
 // warm runs the dependency warmer in a networked prep container. It carries
 // the same non-root-namespace and capability hardening as the agent
@@ -101,7 +86,6 @@ func (m *Manager) warm(ctx context.Context, ws Workspace) error {
 	args := []string{"run", "--rm", userns, "--cap-drop=all", "--security-opt=no-new-privileges",
 		"--label", workspaceLabel(ws.Repository),
 		"-e", "GOPROXY=https://proxy.golang.org", "-e", "GOFLAGS=-mod=readonly", "-e", "GOSUMDB=sum.golang.org"}
-	args = append(args, m.resourceLimitArgs()...)
 	args = append(args, "-v", ws.Path+":/work:Z")
 	args = append(args, cacheVolumes(ws.Repository)...)
 	args = append(args, "-w", "/work", m.Image, "warm-deps")
@@ -142,10 +126,9 @@ func (m *Manager) Start(ctx context.Context, ws Workspace, attemptID string) (Co
 	args := []string{"run", "-d", "--replace", "--name", name, "--network=none", userns,
 		"--label", workspaceLabel(ws.Repository),
 		"--cap-drop=all", "--security-opt=no-new-privileges", "--read-only",
-		"--tmpfs", "/tmp:rw,size=1g", "--mount", agentHomeMount,
+		"--tmpfs", "/tmp:rw", "--mount", agentHomeMount,
 		"-e", "GOPROXY=off", "-e", "GOFLAGS=-mod=mod",
 		"-v", ws.Path + ":/work:Z"}
-	args = append(args, m.resourceLimitArgs()...)
 	args = append(args, cacheVolumes(ws.Repository)...)
 	args = append(args, "-w", "/work", m.Image, "sleep", "infinity")
 	if _, err := run(ctx, "", nil, m.podman(), args...); err != nil {

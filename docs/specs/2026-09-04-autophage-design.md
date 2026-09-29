@@ -45,7 +45,7 @@ The three legs of the lethal trifecta and what is done to each:
 
 Toolbox: a Go binary in the image that serves agentcore's `read`, `write`, `edit`, `grep`, `glob`, `ls` and `bash` tools over MCP stdio, rooted at `/work`. The daemon dials it with `podman exec -i <container> autophage-toolbox` and adapts the tools with the MCP adapter extracted from gyr's `internal/mcp` into `jess/mcp` (see ADR 0002). Inside the sandbox the jess gate is `AllowAll()`; the container is the boundary and the ledger records every call durably.
 
-Container: rootless podman, non-root user, `--cap-drop=all`, `--security-opt=no-new-privileges`, read-only root with writable `/work`, `/tmp` and the cache volumes, memory, cpu and pids limits, a hard wall-clock kill. Fresh container per attempt. The workspace on host disk persists across attempts of one case.
+Container: rootless podman, non-root user, `--cap-drop=all`, `--security-opt=no-new-privileges`, read-only root with writable `/work`, `/tmp` and the cache volumes, no memory/cpu/pids limits (removed 2026-09-29 after they starved real attempts; see ADR 0002's amendment), a hard wall-clock kill. Fresh container per attempt. The workspace on host disk persists across attempts of one case.
 
 Prep container: same image, network allowed, runs the lockfile-driven fetch for each toolchain detected (`go.mod`: `go mod download`; `package-lock.json` or `pnpm-lock.yaml`: `npm ci` or `pnpm install --frozen-lockfile`; `uv.lock`: `uv sync --frozen`). Cache volumes are named per repository.
 

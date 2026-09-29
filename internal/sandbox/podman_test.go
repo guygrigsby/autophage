@@ -21,7 +21,7 @@ func realPodman(t *testing.T) *Manager {
 	if err := exec.Command(bin, "image", "exists", image).Run(); err != nil {
 		t.Skipf("image %s not built; run make image", image)
 	}
-	m := &Manager{Podman: bin, Image: image, WorkspacesDir: t.TempDir(), Memory: "1g", CPUs: "1", Pids: 256, BotName: "autophage[bot]", BotEmail: "autophage[bot]@users.noreply.github.com", Logf: t.Logf}
+	m := &Manager{Podman: bin, Image: image, WorkspacesDir: t.TempDir(), BotName: "autophage[bot]", BotEmail: "autophage[bot]@users.noreply.github.com", Logf: t.Logf}
 	// The cache volumes outlive the containers by design, so a test run that
 	// did not clean up would leave three more of them on the host every time.
 	t.Cleanup(func() {
@@ -149,8 +149,11 @@ cd /work && rm -rf /work/.toolcheck
 // that records its argv and asserts the full hardening flag set from ADR
 // 0002 is present: no network, hardened user namespace, dropped
 // capabilities, no new privileges, read-only root with writable /tmp and
-// /home/agent, resource limits and --replace so a crash between Start and
-// Teardown cannot wedge the next attempt on a name collision.
+// /home/agent, and --replace so a crash between Start and Teardown cannot
+// wedge the next attempt on a name collision. Resource limits are
+// deliberately absent: they starved real attempts before the agent could
+// finish (see rudy#10), so the test asserts none of
+// --memory/--cpus/--pids-limit appears.
 func TestStartHardensTheAgentContainer(t *testing.T) {
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "args")
@@ -159,7 +162,7 @@ func TestStartHardensTheAgentContainer(t *testing.T) {
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	m := &Manager{Podman: bin, Image: "img", WorkspacesDir: t.TempDir(), Memory: "1g", CPUs: "1", Pids: 256, BotName: "b", BotEmail: "b@x", Logf: t.Logf}
+	m := &Manager{Podman: bin, Image: "img", WorkspacesDir: t.TempDir(), BotName: "b", BotEmail: "b@x", Logf: t.Logf}
 	ws := Workspace{Path: t.TempDir(), Repository: "guy/repo"}
 	if _, err := m.Start(t.Context(), ws, "attempt-1"); err != nil {
 		t.Fatal(err)
@@ -172,13 +175,18 @@ func TestStartHardensTheAgentContainer(t *testing.T) {
 	for _, want := range []string{
 		"--network=none", "--userns=keep-id:uid=1000,gid=1000", "--cap-drop=all",
 		"--security-opt=no-new-privileges", "--read-only",
-		"--tmpfs /tmp:rw,size=1g", "--mount " + agentHomeMount,
-		"--memory 1g", "--cpus 1", "--pids-limit 256", "--replace",
+		"--tmpfs /tmp:rw", "--mount " + agentHomeMount,
+		"--replace",
 		"GOPROXY=off",
 		"--label autophage.workspace=" + volumeSlug("guy/repo"),
 	} {
 		if !strings.Contains(line, want) {
 			t.Errorf("podman run args missing %q:\n%s", want, line)
+		}
+	}
+	for _, banned := range []string{"--memory", "--cpus", "--pids-limit"} {
+		if strings.Contains(line, banned) {
+			t.Errorf("podman run args must not carry the resource limit %q:\n%s", banned, line)
 		}
 	}
 }
