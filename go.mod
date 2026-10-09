@@ -6,7 +6,7 @@ require (
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0
 	github.com/google/go-github/v88 v88.0.0
 	github.com/guygrigsby/jess v0.1.0
-	github.com/guygrigsby/llm v0.4.0
+	github.com/guygrigsby/llm v0.5.0
 	github.com/guygrigsby/perch v0.1.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1

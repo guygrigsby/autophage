@@ -132,7 +132,7 @@ func TestBudgetToolRecordsEveryToolCall(t *testing.T) {
 // built for, which is the label the dashboard groups by.
 func TestModelsMeterReportsTheModelID(t *testing.T) {
 	models := &recordModels{}
-	m := Models{Key: "k", Title: "autophage", Metrics: models}
+	m := Models{Metrics: models}
 	m.meter("openai/gpt-5").Observe(llm.Usage{PromptTokens: 11, CompletionTokens: 3, Cost: 0.25, Latency: time.Second})
 
 	if got := models.all(); len(got) != 1 || got[0] != "openai/gpt-5/ok" {

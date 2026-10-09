@@ -1,7 +1,7 @@
-# Copy to ~/.config/autophage/config.toml. Secrets are never set here: the
-# webhook secret and the OpenRouter key come from the environment
-# (AUTOPHAGE_GITHUB_WEBHOOK_SECRET, OPENROUTER_API_KEY). Values below are the
-# built-in defaults except where noted.
+# Copy to ~/.config/autophage/config.toml. The webhook secret is never set
+# here: it comes from the environment (AUTOPHAGE_GITHUB_WEBHOOK_SECRET).
+# Models need no key: Aperture, the gateway on the tailnet, authenticates
+# the host. Values below are the built-in defaults except where noted.
 listen = "127.0.0.1:8080"
 
 [db]
@@ -13,14 +13,21 @@ private_key     = "~/.config/autophage/app.pem"     # path to the App's private 
 bot_login       = "autophage[bot]"
 operator_login  = "guy"                             # GitHub login used for operator-run approvals
 
+# Aperture model ids, as its /v1/models lists them. The gateway is on the
+# tailnet and authenticates the host, so no key is configured anywhere.
+
 [model.triage]
-model = "moonshotai/kimi-k2.7-code"                 # OpenRouter model id
+model = "zai/glm-5.3"
 
 [model.auto]
-model = "anthropic/claude-sonnet-5.5"
+model = "anthropic/claude-sonnet-5"
 
 [model.approved]
-model = "anthropic/claude-sonnet-5.5"
+model = "anthropic/claude-sonnet-5"
+
+# Upkeep repair rounds; the free route on the local Qwen.
+[model.repair]
+model = "qwen-27b"
 
 [budget.auto]
 turns      = 80

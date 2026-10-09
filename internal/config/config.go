@@ -32,18 +32,23 @@ type GitHubConfig struct {
 	PrivateKey    string `toml:"private_key"` // path to the App's PEM
 	BotLogin      string `toml:"bot_login"`   // e.g. autophage[bot]
 	OperatorLogin string `toml:"operator_login"`
-	// WebhookSecret and the OpenRouter key are read from the environment:
-	// AUTOPHAGE_GITHUB_WEBHOOK_SECRET and OPENROUTER_API_KEY.
+	// WebhookSecret is read from the environment:
+	// AUTOPHAGE_GITHUB_WEBHOOK_SECRET. The model gateway needs no secret:
+	// Aperture is on the tailnet and authenticates the host.
 }
 
 type ModelTier struct {
-	Model string `toml:"model"` // OpenRouter model id
+	Model string `toml:"model"` // Aperture model id, as /v1/models lists it
 }
 
 type ModelConfig struct {
 	Triage   ModelTier `toml:"triage"`
 	Auto     ModelTier `toml:"auto"`
 	Approved ModelTier `toml:"approved"`
+	// Repair is the tier upkeep rounds run on. It can be a smaller model
+	// than the attempts: a repair reads a failing check and a diff that
+	// already exists rather than writing a fix from a description.
+	Repair ModelTier `toml:"repair"`
 }
 
 type BudgetTier struct {
@@ -94,6 +99,15 @@ func Default() Config {
 		Sandbox: SandboxConfig{Image: "localhost/autophage-sandbox:latest", WorkspacesDir: "~/.local/share/autophage/workspaces", Concurrency: 2},
 		Label:   LabelConfig{Approved: "approved"},
 		GitHub:  GitHubConfig{BotLogin: "autophage[bot]"},
+		Model: ModelConfig{
+			Triage:   ModelTier{Model: "zai/glm-5.3"},
+			Auto:     ModelTier{Model: "anthropic/claude-sonnet-5"},
+			Approved: ModelTier{Model: "anthropic/claude-sonnet-5"},
+			// The free route on the local Qwen: repairs are high-volume
+			// background work, and a repair reads a failing check and an
+			// existing diff rather than writing a fix from a description.
+			Repair: ModelTier{Model: "qwen-27b"},
+		},
 		Upkeep: UpkeepConfig{
 			DependabotLogin: "dependabot[bot]",
 			RoundCap:        3,
@@ -109,21 +123,17 @@ func Default() Config {
 // Secrets are the values that never live in the file.
 type Secrets struct {
 	WebhookSecret []byte
-	OpenRouterKey string
 }
 
-// LoadSecrets reads the environment. Both are required to run the daemon.
+// LoadSecrets reads the environment. The webhook secret is required to run
+// the daemon; the model gateway contributes none, because Aperture is on the
+// tailnet and authenticates the host rather than a key.
 func LoadSecrets() (Secrets, error) {
 	ws := os.Getenv("AUTOPHAGE_GITHUB_WEBHOOK_SECRET")
-	or := os.Getenv("OPENROUTER_API_KEY")
-	var errs []error
 	if ws == "" {
-		errs = append(errs, errors.New("AUTOPHAGE_GITHUB_WEBHOOK_SECRET is not set"))
+		return Secrets{}, errors.New("AUTOPHAGE_GITHUB_WEBHOOK_SECRET is not set")
 	}
-	if or == "" {
-		errs = append(errs, errors.New("OPENROUTER_API_KEY is not set"))
-	}
-	return Secrets{WebhookSecret: []byte(ws), OpenRouterKey: or}, errors.Join(errs...)
+	return Secrets{WebhookSecret: []byte(ws)}, nil
 }
 
 // Budgets is everything Validate turns the file into: the domain budgets and
@@ -155,7 +165,7 @@ func (c Config) Validate() (Budgets, error) {
 	if c.GitHub.OperatorLogin == "" {
 		errs = append(errs, errors.New("github.operator_login is required"))
 	}
-	for name, tier := range map[string]ModelTier{"triage": c.Model.Triage, "auto": c.Model.Auto, "approved": c.Model.Approved} {
+	for name, tier := range map[string]ModelTier{"triage": c.Model.Triage, "auto": c.Model.Auto, "approved": c.Model.Approved, "repair": c.Model.Repair} {
 		if tier.Model == "" {
 			errs = append(errs, fmt.Errorf("model.%s.model is required", name))
 		}

@@ -118,9 +118,10 @@ Never write the actual secret values into this runbook or any committed file.
 ssh <host> 'install -m 0600 /dev/null ~/.config/autophage/env'
 ssh <host> 'cat >> ~/.config/autophage/env' <<'EOF'
 AUTOPHAGE_GITHUB_WEBHOOK_SECRET=<webhook secret>
-OPENROUTER_API_KEY=<openrouter api key>
 EOF
 ```
+
+No model key: model calls go to Aperture, the gateway on the tailnet, which authenticates the host. The deploy host must be on the tailnet and resolve Aperture's name.
 
 ## 6. Config (ssh)
 

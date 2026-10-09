@@ -1090,10 +1090,10 @@ func TestRunnerCancelCarriesTheReason(t *testing.T) {
 	}
 }
 
-func TestTriagerReportsAModelItCannotBuild(t *testing.T) {
+func TestTriagerReportsAModelTheGatewayRejects(t *testing.T) {
 	r := &Runner{TriageModel: "some/model"}
 	if _, err := r.Triager().Classify(t.Context(), "t", "b"); err == nil {
-		t.Error("a runner with no OpenRouter key built a triager that answers")
+		t.Error("a triager whose model the gateway does not list answered")
 	}
 }
 

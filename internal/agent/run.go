@@ -25,7 +25,7 @@ const summaryPrompt = "The run has ended. Reply now with only your final summary
 // RunInput is everything one attempt run needs.
 type RunInput struct {
 	Model ac.ChatModel
-	// ModelID is the OpenRouter id Model was built for, which is the label
+	// ModelID is the Aperture id Model was built for, which is the label
 	// a model failure is counted under.
 	ModelID    string
 	Tools      []ac.Tool

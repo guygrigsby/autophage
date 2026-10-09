@@ -24,7 +24,7 @@ make build
 
 ## Building
 
-`go.mod` pins `github.com/guygrigsby/jess` (v0.1.0, the MCP adapter and ledger) and `github.com/guygrigsby/llm` (v0.4.0, the OpenRouter adapter) to published tags, so a plain `make build` works from a clone with no sibling checkouts. Bumping either is a `go get` plus `go mod tidy`; the release steps for a new tag are in the runbook's step 1.
+`go.mod` pins `github.com/guygrigsby/jess` (v0.1.0, the MCP adapter and ledger) and `github.com/guygrigsby/llm` (v0.5.0, the aperture adapter) to published tags, so a plain `make build` works from a clone with no sibling checkouts. Bumping either is a `go get` plus `go mod tidy`; the release steps for a new tag are in the runbook's step 1.
 
 ## CLI
 
@@ -38,7 +38,7 @@ make build
 
 ## Config
 
-Copy `config.example.toml` to `~/.config/autophage/config.toml`. Secrets are never read from the file: the webhook secret and the OpenRouter key come from `AUTOPHAGE_GITHUB_WEBHOOK_SECRET` and `OPENROUTER_API_KEY`.
+Copy `config.example.toml` to `~/.config/autophage/config.toml`. The webhook secret never lives in the file: it comes from `AUTOPHAGE_GITHUB_WEBHOOK_SECRET`. Models need no key: the Aperture gateway is on the tailnet and authenticates the host.
 
 ## Deploy on a Linux host (systemd)
 
@@ -48,8 +48,9 @@ Postgres runs natively (one database holds autophage's tables and jess's ledger 
 
 ```
 AUTOPHAGE_GITHUB_WEBHOOK_SECRET=...
-OPENROUTER_API_KEY=...
 ```
+
+Model calls go to Aperture, the gateway on the tailnet, so no model key is configured anywhere. The deploy host must resolve Aperture's tailnet name.
 
 Then:
 
@@ -84,4 +85,4 @@ tailscale serve --bg --set-path /metrics http://127.0.0.1:8080/metrics
 
 - [Design](docs/specs/2026-09-04-autophage-design.md), [domain model](docs/specs/2026-09-04-autophage-domain-model.md), [contracts](docs/specs/2026-09-04-autophage-contracts.md), [context map](docs/specs/2026-09-04-autophage-context-map.md).
 - [Deployment runbook](docs/runbooks/deploy.md): first live deployment, step by step.
-- ADRs in `docs/adr/`: [0001 jess as agent harness](docs/adr/0001-jess-as-agent-harness.md), [0002 sandbox posture](docs/adr/0002-sandbox-posture.md), [0003 trust gate and approval label](docs/adr/0003-trust-gate-and-approval-label.md), [0004 GitHub App webhooks and deployment](docs/adr/0004-github-app-webhooks-and-deployment.md), [0005 budgeted attempt with triage](docs/adr/0005-budgeted-attempt-with-triage.md), [0006 OpenRouter as model provider](docs/adr/0006-openrouter-as-model-provider.md).
+- ADRs in `docs/adr/`: [0001 jess as agent harness](docs/adr/0001-jess-as-agent-harness.md), [0002 sandbox posture](docs/adr/0002-sandbox-posture.md), [0003 trust gate and approval label](docs/adr/0003-trust-gate-and-approval-label.md), [0004 GitHub App webhooks and deployment](docs/adr/0004-github-app-webhooks-and-deployment.md), [0005 budgeted attempt with triage](docs/adr/0005-budgeted-attempt-with-triage.md), [0006 OpenRouter as model provider](docs/adr/0006-openrouter-as-model-provider.md) (superseded by [0008 Aperture as model gateway](docs/adr/0008-aperture-as-model-gateway.md)), [0007 Dependabot bumps as an upkeep context](docs/adr/0007-dependabot-bumps-as-an-upkeep-context.md), [0008 Aperture as model gateway](docs/adr/0008-aperture-as-model-gateway.md).

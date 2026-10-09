@@ -122,15 +122,17 @@ func TestTruncateRespectsRuneBoundaries(t *testing.T) {
 }
 
 func TestModelsTierValidates(t *testing.T) {
-	m := Models{Key: "k", Title: "autophage"}
+	m := Models{}
 	if _, err := m.Tier(""); err == nil {
 		t.Error("empty model accepted")
 	}
+	// No key to validate: Aperture authenticates the host, so every
+	// non-empty id builds a tier.
 	llmModel, err := m.Tier("moonshotai/kimi-k3")
 	if err != nil || llmModel == nil {
 		t.Errorf("tier = %v %v", llmModel, err)
 	}
-	if _, err := (Models{}).Tier("x/y"); err == nil {
-		t.Error("empty key accepted")
+	if pn, ok := llmModel.(interface{ ProviderName() string }); !ok || pn.ProviderName() != "aperture" {
+		t.Errorf("provider = %v", llmModel)
 	}
 }

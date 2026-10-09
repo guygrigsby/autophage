@@ -41,7 +41,7 @@ func (NopMetrics) RepairEnded(string, resolution.Usage)           {}
 
 // ModelMetrics reports one model call: the tokens, latency and cost an
 // adapter's Meter saw, or the error a call returned instead. model is the
-// configured OpenRouter id, which is three values in production.
+// configured Aperture id, which is four values in production.
 type ModelMetrics interface {
 	Observe(model string, u llm.Usage, err error)
 }

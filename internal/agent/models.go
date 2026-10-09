@@ -4,13 +4,13 @@ import (
 	"errors"
 
 	"github.com/guygrigsby/llm"
-	"github.com/guygrigsby/llm/openrouter"
+	"github.com/guygrigsby/llm/aperture"
 )
 
-// Models builds one llm.LLM per OpenRouter model id. One key for every tier.
+// Models builds one llm.LLM per Aperture model id. The gateway is on the
+// tailnet and authenticates the host, so there is no key to carry: the
+// endpoint and its trust live with the network, not the process.
 type Models struct {
-	Key   string
-	Title string
 	// Metrics observes every metered call each adapter makes. Nil is
 	// NopModelMetrics.
 	Metrics ModelMetrics
@@ -18,14 +18,10 @@ type Models struct {
 
 // Tier returns the adapter for modelID.
 func (m Models) Tier(modelID string) (llm.LLM, error) {
-	if m.Key == "" {
-		return nil, errors.New("agent: OpenRouter key is empty")
-	}
 	if modelID == "" {
 		return nil, errors.New("agent: model id is empty")
 	}
-	return openrouter.New(openrouter.Config{APIKey: m.Key, Model: modelID, Title: m.Title,
-		Referer: "https://github.com/guygrigsby/autophage", Meter: m.meter(modelID)})
+	return aperture.New(aperture.Config{Model: modelID, Meter: m.meter(modelID)})
 }
 
 // meter is the adapter's Meter for one tier: it labels the usage with the

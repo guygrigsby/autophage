@@ -49,7 +49,7 @@ type Runner struct {
 	GitHub  resolution.GitHub
 	Sandbox sandbox.Sandbox
 	Models  Models
-	// AttemptModel is the OpenRouter id attempts run on. ApprovedModel
+	// AttemptModel is the Aperture id attempts run on. ApprovedModel
 	// overrides it for an approved attempt when set; TriageModel is the
 	// tier Triager sizes on.
 	AttemptModel  string
@@ -64,7 +64,7 @@ type Runner struct {
 	Metrics  Metrics
 	// ModelOverride replaces the model every tier would build. Test-only:
 	// the daemon leaves it nil, and internal/e2e sets a scripted model so a
-	// whole attempt runs with no OpenRouter key. It is the only seam, so
+	// whole attempt runs with no gateway. It is the only seam, so
 	// triage and the attempt take the same route to a model.
 	ModelOverride ac.ChatModel
 

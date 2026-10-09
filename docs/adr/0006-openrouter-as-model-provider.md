@@ -1,6 +1,6 @@
 # 6. OpenRouter as the model provider
 
-Status: Accepted
+Status: Superseded by 0008
 Date: 2026-09-04
 
 ## Context

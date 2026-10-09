@@ -65,7 +65,7 @@ Ingress: Tailscale Funnel on the deploy host exposes `POST /webhook/github`. The
 
 ## Models
 
-OpenRouter for every tier. The `llm` module gains an `openrouter` adapter (chat completions wire format, OpenRouter headers, reasoning passthrough), contributed upstream. Config names one OpenRouter model id per tier: `[model.triage]`, `[model.auto]`, `[model.approved]`. The key is `OPENROUTER_API_KEY` from your secret store. Any provider for any repository, public or private.
+Aperture, the model gateway on the tailnet, for every tier. It authenticates the host, so no key is configured anywhere; the `llm` module's `aperture` adapter names it (ADR 0008). Config names one Aperture model id per tier: `[model.triage]`, `[model.auto]`, `[model.approved]`, and `[model.repair]` for upkeep repair rounds. Defaults: `zai/glm-5.3` triage, `anthropic/claude-sonnet-5.5` auto and approved, `qwen-27b` (the free route on the local Qwen) repair. Any provider for any repository, public or private.
 
 ## Process
 
@@ -93,13 +93,15 @@ addr = "127.0.0.1:8080"
 [db]
 url = "postgres:///autophage"
 
+# Aperture ids, as its /v1/models lists them; no key anywhere
 [model.triage]
-model = "…"          # OpenRouter id
+model = "…"
 [model.auto]
 model = "…"
 [model.approved]
 model = "…"
-# key from OPENROUTER_API_KEY
+[model.repair]
+model = "…"
 
 [budget.auto]
 turns      = 0

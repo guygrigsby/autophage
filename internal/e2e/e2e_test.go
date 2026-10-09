@@ -116,7 +116,7 @@ const summary = "What I found: the repository has no " + fixFile + ".\n" +
 	"What is left: nothing.\n" +
 	"What I would do with more budget: nothing."
 
-// scriptedModel stands in for the OpenRouter tier on both routes the runner
+// scriptedModel stands in for the gateway tier on both routes the runner
 // takes to a model. A triage call (recognised by its system prompt) answers
 // with the sizing JSON; an attempt call writes the file, commits it through
 // the shell and then answers with the summary in the required shape. A turn

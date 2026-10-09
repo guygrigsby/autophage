@@ -25,7 +25,7 @@ type Repairer struct {
 	GitHub  resolution.GitHub
 	Sandbox sandbox.Sandbox
 	Models  Models
-	// Model is the OpenRouter id repair rounds run on.
+	// Model is the Aperture id repair rounds run on.
 	Model    string
 	RoundCap int
 	Ledger   ledger.DurableSink

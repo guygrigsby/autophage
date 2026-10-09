@@ -10,9 +10,10 @@ func complete() Config {
 	c.GitHub.AppID = 1
 	c.GitHub.PrivateKey = "/x/app.pem"
 	c.GitHub.OperatorLogin = "guy"
-	c.Model.Triage.Model = "moonshotai/kimi-k2.7-code"
-	c.Model.Auto.Model = "anthropic/claude-sonnet-5.5"
-	c.Model.Approved.Model = "anthropic/claude-sonnet-5.5"
+	c.Model.Triage.Model = "zai/glm-5.3"
+	c.Model.Auto.Model = "anthropic/claude-sonnet-5"
+	c.Model.Approved.Model = "anthropic/claude-sonnet-5"
+	c.Model.Repair.Model = "qwen-27b"
 	return c
 }
 
@@ -28,28 +29,28 @@ func TestValidateComplete(t *testing.T) {
 
 func TestValidateReportsEveryMissingField(t *testing.T) {
 	c := Default()
+	c.GitHub = GitHubConfig{}
+	c.Model = ModelConfig{}
 	c.Budget.Auto.WallClock = "soon"
 	_, err := c.Validate()
 	if err == nil {
 		t.Fatal("empty config validated")
 	}
-	for _, want := range []string{"github.app_id", "github.private_key", "github.operator_login", "model.triage.model", "model.auto.model", "model.approved.model", "budget.auto.wall_clock"} {
+	for _, want := range []string{"github.app_id", "github.private_key", "github.operator_login", "model.triage.model", "model.auto.model", "model.approved.model", "model.repair.model", "budget.auto.wall_clock"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error lacks %q: %v", want, err)
 		}
 	}
 }
 
-func TestLoadSecretsRequiresBoth(t *testing.T) {
+func TestLoadSecretsRequiresTheWebhookSecret(t *testing.T) {
 	t.Setenv("AUTOPHAGE_GITHUB_WEBHOOK_SECRET", "")
-	t.Setenv("OPENROUTER_API_KEY", "")
-	if _, err := LoadSecrets(); err == nil || !strings.Contains(err.Error(), "OPENROUTER_API_KEY") {
+	if _, err := LoadSecrets(); err == nil || !strings.Contains(err.Error(), "AUTOPHAGE_GITHUB_WEBHOOK_SECRET") {
 		t.Errorf("err = %v", err)
 	}
 	t.Setenv("AUTOPHAGE_GITHUB_WEBHOOK_SECRET", "s")
-	t.Setenv("OPENROUTER_API_KEY", "k")
 	s, err := LoadSecrets()
-	if err != nil || string(s.WebhookSecret) != "s" || s.OpenRouterKey != "k" {
+	if err != nil || string(s.WebhookSecret) != "s" {
 		t.Errorf("secrets = %+v %v", s, err)
 	}
 }

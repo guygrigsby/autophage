@@ -105,7 +105,7 @@ Repository means the same thing on both sides. No split.
 ## Still open
 
 - Budget numbers for `auto` and `approved`: turns, wall clock, diff lines.
-- OpenRouter model ids per tier: triage, auto attempt, approved attempt.
+- ~~OpenRouter model ids per tier~~ decided: Aperture ids, `zai/glm-5.3` for triage, `anthropic/claude-sonnet-5` for auto and approved, `qwen-27b` (the free route on the local Qwen) for upkeep repair rounds.
 - Label name: `approved` as asked, but a repo already using that label for something else would trigger attempts. `autophage:approved` avoids the collision.
 - Workspace retention after Done or Closed.
 - A Closed case whose issue is reopened: v1 does nothing.

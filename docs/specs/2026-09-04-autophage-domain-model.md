@@ -129,7 +129,7 @@ Value object, owned by `Case`, table `case_triages`. Exists exactly when a trust
 | `repository`, `number` | | Owner key |
 | `size` | Size | Small: attempt now under the auto budget. Large: wait for approval |
 | `rationale` | string | The triage model's stated reasoning. Posted verbatim as a comment, never executed. Non-empty |
-| `model` | string | OpenRouter model id used |
+| `model` | string | Aperture model id used |
 | `triagedAt` | Timestamp | |
 
 ### Relationships
@@ -223,7 +223,7 @@ Value object, owned by `Attempt`, table `attempt_runs`. Exists exactly when the 
 |---|---|---|
 | `attemptId` | string | Owner key |
 | `runId` | string | jess ledger run id. `autophage why` joins on it |
-| `model` | string | OpenRouter model id the agent ran on |
+| `model` | string | Aperture model id the agent ran on |
 | `baseSha` | string | The default-branch commit the case branch was rebased onto before the run |
 | `beganAt` | Timestamp | |
 
