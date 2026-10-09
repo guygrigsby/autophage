@@ -17,20 +17,20 @@ operator_login  = "guy"                             # GitHub login used for oper
 model = "moonshotai/kimi-k2.7-code"                 # OpenRouter model id
 
 [model.auto]
-model = "moonshotai/kimi-k3"
+model = "anthropic/claude-sonnet-5.5"
 
 [model.approved]
-model = "moonshotai/kimi-k3"
+model = "anthropic/claude-sonnet-5.5"
 
 [budget.auto]
-turns      = 40
-wall_clock = "45m"
-diff_lines = 600
+turns      = 80
+wall_clock = "90m"
+diff_lines = 2000
 
 [budget.approved]
-turns      = 150
-wall_clock = "3h"
-diff_lines = 3000
+turns      = 300
+wall_clock = "6h"
+diff_lines = 10000
 
 [sandbox]
 image          = "localhost/autophage-sandbox:latest"

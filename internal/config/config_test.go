@@ -11,8 +11,8 @@ func complete() Config {
 	c.GitHub.PrivateKey = "/x/app.pem"
 	c.GitHub.OperatorLogin = "guy"
 	c.Model.Triage.Model = "moonshotai/kimi-k2.7-code"
-	c.Model.Auto.Model = "moonshotai/kimi-k3"
-	c.Model.Approved.Model = "moonshotai/kimi-k3"
+	c.Model.Auto.Model = "anthropic/claude-sonnet-5.5"
+	c.Model.Approved.Model = "anthropic/claude-sonnet-5.5"
 	return c
 }
 
@@ -21,7 +21,7 @@ func TestValidateComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.Auto.MaxTurns() != 40 || b.Approved.MaxTurns() != 150 {
+	if b.Auto.MaxTurns() != 80 || b.Approved.MaxTurns() != 300 {
 		t.Errorf("budgets = %d %d", b.Auto.MaxTurns(), b.Approved.MaxTurns())
 	}
 }

@@ -90,7 +90,7 @@ func Default() Config {
 	return Config{
 		Listen:  "127.0.0.1:8080",
 		DB:      DBConfig{URL: "postgres:///autophage"},
-		Budget:  BudgetConfig{Auto: BudgetTier{Turns: 40, WallClock: "45m", DiffLines: 600}, Approved: BudgetTier{Turns: 150, WallClock: "3h", DiffLines: 3000}},
+		Budget:  BudgetConfig{Auto: BudgetTier{Turns: 80, WallClock: "90m", DiffLines: 2000}, Approved: BudgetTier{Turns: 300, WallClock: "6h", DiffLines: 10000}},
 		Sandbox: SandboxConfig{Image: "localhost/autophage-sandbox:latest", WorkspacesDir: "~/.local/share/autophage/workspaces", Concurrency: 2},
 		Label:   LabelConfig{Approved: "approved"},
 		GitHub:  GitHubConfig{BotLogin: "autophage[bot]"},
