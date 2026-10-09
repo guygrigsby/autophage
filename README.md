@@ -1,3 +1,5 @@
+![Autophage logo - mechanical oroborous in red](./autophage_crimson.svg)
+
 # autophage
 
 A daemon on a Linux host that watches issues on enrolled GitHub repositories through a GitHub App. For each new issue it decides whether it may act (trust gate), how big the work is (triage) and runs a jess coding agent in a podman sandbox under a budget. The output is a pull request, or a partial pull request plus a comment with findings and a request for approval when the budget ran out. Approval is the `approved` label on the issue.
