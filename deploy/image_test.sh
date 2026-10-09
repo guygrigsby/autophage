@@ -85,7 +85,7 @@ scratch commit
 author="$(agent "$SCRATCH_TMP" "$SCRATCH_VOL" sh -c 'set -e
   cd /work && git init -q . && echo fix > a && git add a
   git commit -q -m t && git log -1 --format="%an <%ae>"')"
-[ "$author" = 'autophage[bot] <autophage[bot]@users.noreply.github.com>' ] \
+[ "$author" = 'autophage-agent[bot] <325819538+autophage-agent[bot]@users.noreply.github.com>' ] \
   || fail "the image has no git identity: an agent commit is authored '$author'"
 
 # Everything a phase writes has to land on a mount: the root filesystem is

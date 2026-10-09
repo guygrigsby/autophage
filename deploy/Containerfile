@@ -84,8 +84,8 @@ RUN chmod 0755 /usr/local/bin/warm-deps /usr/local/bin/autophage-toolbox \
 # matches the daemon's own BotName and BotEmail (internal/sandbox Manager,
 # wired in cmd/autophaged), so the agent's commits and the ones host git
 # makes carry the same author.
-RUN git config --system user.name 'autophage[bot]' \
-    && git config --system user.email 'autophage[bot]@users.noreply.github.com'
+RUN git config --system user.name 'autophage-agent[bot]' \
+    && git config --system user.email '325819538+autophage-agent[bot]@users.noreply.github.com'
 USER agent
 # GOFLAGS keeps -mod=mod: an attempt may need to touch go.mod/go.sum. GOPROXY=off
 # is set by the daemon at run time for the agent phase, on top of this; the real

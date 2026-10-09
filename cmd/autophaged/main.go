@@ -80,8 +80,10 @@ func main() {
 	// One sandbox manager and one model factory, shared by the issue runner
 	// and the repair runner: they contend for the same workspace locks and
 	// the same pool, which only works if it is literally the same manager.
+	// The App's GitHub user id prefixes the noreply address, which is what
+	// attributes daemon commits to the App account (issue autophage-cou).
 	sb := &sandbox.Manager{Image: cfg.Sandbox.Image, WorkspacesDir: expandHome(cfg.Sandbox.WorkspacesDir),
-		BotName: cfg.GitHub.BotLogin, BotEmail: strings.TrimSuffix(cfg.GitHub.BotLogin, "[bot]") + "[bot]@users.noreply.github.com", Logf: log.Printf}
+		BotName: cfg.GitHub.BotLogin, BotEmail: "325819538+autophage-agent[bot]@users.noreply.github.com", Logf: log.Printf}
 	models := agent.Models{Key: secrets.OpenRouterKey, Title: "autophage", Metrics: api.ModelMetrics{}}
 	runner := &agent.Runner{
 		Store:         st,
