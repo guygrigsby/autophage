@@ -47,7 +47,7 @@ func BuildBrief(in BriefInput) (string, error) {
 	b.WriteString("\n\n")
 	fmt.Fprintf(&b, "You are on branch %s, based on %s. Your working tree is /work. There is no network: dependencies were fetched before you started; a fetch that fails is a fact to report, not a problem to solve.\n\n", c.Branch(), in.Repository.DefaultBranch)
 	wallclockMins := int(in.Budget.MaxWallClock().Minutes())
-	fmt.Fprintf(&b, "Budget: %d turns, %dm wall clock, %d diff lines against the base commit. When 80%% of the turns or the time is gone you will be told to wrap up. When the budget is exhausted the run is stopped, whatever is committed is pushed and a summary is required. Commit as you go, in small coherent commits, so nothing is lost when the stop comes.\n\n", in.Budget.MaxTurns(), wallclockMins, in.Budget.MaxDiffLines())
+	fmt.Fprintf(&b, "Budget: %d turns, %dm wall clock, %d diff lines against the base commit. When 80%% of the turns or the time is gone you will be told to wrap up. When the budget is exhausted the run is stopped, whatever is committed is pushed, committed work is opened as a pull request and a summary is required. Commit as you go, in small coherent commits, so nothing is lost when the stop comes.\n\n", in.Budget.MaxTurns(), wallclockMins, in.Budget.MaxDiffLines())
 	if in.Prior != nil {
 		fmt.Fprintf(&b, "This is a resumed attempt. The branch already holds the previous attempt's commits, rebased onto %s; if the rebase left conflict markers, resolving them is your first job. The previous attempt ended with %s and reported:\n\n%s\n\n", in.Repository.DefaultBranch, in.Prior.Kind, in.Prior.Summary)
 	}

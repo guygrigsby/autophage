@@ -132,7 +132,7 @@ func loadAttempts(ctx context.Context, q querier, caseID string) ([]resolution.A
 	rows, err := q.Query(ctx, `select a.id, a.ordinal, a.kind, a.max_turns, a.max_wall_clock, a.max_diff_lines, a.brief, a.started_at,
 			r.run_id, r.model, r.base_sha, r.began_at,
 			o.kind, o.ended_at, o.turns, o.input_tokens, o.output_tokens, o.wall_clock, o.diff_lines, o.summary,
-			p.pr_number, p.head_sha, e.limit_name, f.class, f.message, b.reason
+			p.pr_number, p.head_sha, e.limit_name, e.pr_number, e.head_sha, f.class, f.message, b.reason
 		from attempts a
 		left join attempt_runs r on r.attempt_id = a.id
 		left join attempt_outcomes o on o.attempt_id = a.id
@@ -159,10 +159,12 @@ func loadAttempts(ctx context.Context, q querier, caseID string) ([]resolution.A
 		var wall *pgtype.Interval
 		var prNumber *int
 		var headSha, limit, class, message, reason *string
+		var ePR *int
+		var eHead *string
 		if err := rows.Scan(&a.ID, &a.Ordinal, &kind, &maxTurns, &maxWall, &maxDiff, &a.Brief, &a.StartedAt,
 			&runID, &runModel, &baseSha, &beganAt,
 			&oKind, &endedAt, &turns, &inTok, &outTok, &wall, &diff, &summary,
-			&prNumber, &headSha, &limit, &class, &message, &reason); err != nil {
+			&prNumber, &headSha, &limit, &ePR, &eHead, &class, &message, &reason); err != nil {
 			return nil, err
 		}
 		a.Kind = resolution.AttemptKind(kind)
@@ -177,6 +179,10 @@ func loadAttempts(ctx context.Context, q querier, caseID string) ([]resolution.A
 				Usage: resolution.Usage{Turns: *turns, InputTokens: *inTok, OutputTokens: *outTok, WallClock: fromInterval(*wall), DiffLines: *diff}}
 			if prNumber != nil {
 				o.PRNumber, o.HeadSha = *prNumber, *headSha
+			} else if ePR != nil {
+				// The partial-work PR an exhausted attempt opened; the columns
+				// sit on the exhaustions variant since the 2026-10-13 amendment.
+				o.PRNumber, o.HeadSha = *ePR, *eHead
 			}
 			if limit != nil {
 				o.Limit = resolution.Limit(*limit)

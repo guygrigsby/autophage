@@ -44,6 +44,11 @@ type GitHub interface {
 	MintToken(ctx context.Context, repo Repository) (Token, error)
 	PostComment(ctx context.Context, repository string, number int, body string) (commentID int64, err error)
 	OpenPullRequest(ctx context.Context, repository, head, base, title, body string) (prNumber int, err error)
+	// PullRequestForBranch finds the open pull request whose head is the
+	// branch. The runner uses it when opening fails because a prior attempt
+	// on the same branch already opened one, so a resumed attempt records
+	// the same pull request instead of failing to open a duplicate.
+	PullRequestForBranch(ctx context.Context, repository, branch string) (prNumber int, found bool, err error)
 	EnsureLabel(ctx context.Context, repository, name string) error
 }
 

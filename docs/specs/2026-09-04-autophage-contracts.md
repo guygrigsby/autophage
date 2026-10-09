@@ -396,7 +396,7 @@ Every Case transition through the three contracts.
 | `Queued -> Attempting` | none: Scheduler (deliberate: the operator cannot jump the queue) | `AttemptStarted` | `attempts` insert, `case_transitions`, `cases.state`; one-open-attempt store-enforced |
 | `RecordRun` | none | `RunBegan` | `attempt_runs` insert |
 | `Attempting -> Done` | none: runner | `AttemptEnded` | `attempt_outcomes` + `attempt_outcome_pull_requests`, `case_transitions`, `cases.state` |
-| `Attempting -> AwaitingApproval` (exhausted) | none: runner | `AttemptEnded` | `attempt_outcomes` + `attempt_outcome_exhaustions`, transition |
+| `Attempting -> AwaitingApproval` (exhausted) | none: runner | `AttemptEnded` | `attempt_outcomes` + `attempt_outcome_exhaustions` (`pr_number`/`head_sha` set when the partial work was opened as a PR), transition |
 | `Attempting -> AwaitingApproval` (operator stop) | `POST /api/attempts/{id}/stop` | `AttemptEnded` | `attempt_outcomes` + `attempt_outcome_aborts(operator_stop)`, transition |
 | `Attempting -> Failed` | none: runner | `AttemptEnded` | `attempt_outcomes` + `attempt_outcome_failures`, transition |
 | `Attempting -> Queued` / `Failed` (daemon restart) | none: boot | `AttemptEnded` | `attempt_outcomes` + `attempt_outcome_aborts(daemon_restart)`, transition; requeue-once store-enforced |

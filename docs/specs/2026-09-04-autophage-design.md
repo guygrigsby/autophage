@@ -14,7 +14,7 @@ A daemon on a Linux host that watches issues on enrolled GitHub repositories thr
 4. `issues.labeled` with `approved` records an Approval. Gated, AwaitingApproval and Failed go to Queued under the `approved` budget.
 5. The dispatcher starts attempts for Queued cases within the concurrency limit.
 6. An attempt: mint a token scoped to the repo, clone or fetch and rebase the case branch onto the default branch, warm dependencies in a networked prep container, start the agent container with no network, dial the toolbox, build the brief, run jess under the budget with steers, force a summary turn, commit and push, open the PR or post the summary, record the outcome, tear down.
-7. Outcome drives the state: PullRequestOpened to Done; BudgetExhausted to AwaitingApproval with the branch pushed and findings posted; Failed to Failed with the error posted.
+7. Outcome drives the state: PullRequestOpened to Done; BudgetExhausted to AwaitingApproval with the branch pushed, the partial work opened as a pull request when there is committed work, and findings posted; Failed to Failed with the error posted.
 8. `issues.closed` closes the case and aborts a running attempt.
 
 ## Trust gate
@@ -31,7 +31,7 @@ Only trusted cases. Structured output: a `size` enum plus `rationale` text. The 
 
 A Budget is turns, wall clock and diff lines. Two named budgets in config, `auto` and `approved`. The Agent adapter enforces them: turns via jess `WithMaxTurns`, wall clock via context deadline, diff lines by running `git diff --shortstat <baseSha>` in the container after each tool call. At 80% of turns or wall clock it injects a steer: wrap up, commit what you have, then write the summary. Every attempt ends with one forced summary turn in the fixed shape (what I found, what I did, what is left, what I would do with more budget). That summary is the issue comment and the PR body.
 
-On exhaustion the branch is pushed anyway. The approved attempt resumes on the same branch, rebased onto the default branch first, with the prior summary in its brief. Rebase conflicts are the agent's first job and the brief says so.
+On exhaustion the branch is pushed anyway, and when the stop left committed, marker-free work the runner opens a pull request for it (reusing the one a prior attempt on the same branch already opened), so partial work is reviewable immediately instead of stranded on a branch. The case still waits for approval. The approved attempt resumes on the same branch, rebased onto the default branch first, with the prior summary in its brief, and its outcome's pull request is the same one. Rebase conflicts are the agent's first job and the brief says so.
 
 The brief states the situation plainly: who autophage is, that the run is unattended, the requester's trust, the triage size, the branch, the exact budget numbers, what happens on exhaustion, and the summary shape. The issue text is fenced as untrusted input. Full content rules in the domain model under Brief.
 

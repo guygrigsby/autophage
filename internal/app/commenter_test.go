@@ -57,3 +57,49 @@ func TestCommenterPostsTriageAndOutcomeOnceEach(t *testing.T) {
 		t.Errorf("comments = %q", posted)
 	}
 }
+
+func TestOutcomeBodyNamesThePartialPullRequest(t *testing.T) {
+	b, _ := resolution.NewBudget(10, 3600e9, 500)
+	req, _ := resolution.NewRequester("guy", resolution.AssociationOwner)
+	outcome, err := resolution.OutcomeExhaustedWithPullRequest(resolution.LimitDiffLines, 12, "0123456789abcdef0123456789abcdef01234567", "What I found: a lot.\nWhat I did: some.\nWhat is left: the rest.\nWhat I would do with more budget: the rest.", resolution.Usage{}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := resolution.NewCase("guy/repo", 7, req, t0)
+	if err := c.RecordTriage(resolution.Triage{Size: resolution.Small, Rationale: "r", Model: "m", TriagedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.StartAttempt(resolution.Auto, b, "brief", t0); err != nil {
+		t.Fatal(err)
+	}
+	a := c.OpenAttempt()
+	if err := c.RecordOutcome(a.ID, outcome); err != nil {
+		t.Fatal(err)
+	}
+	withPR := OutcomeBody(c, c.Attempts()[0], "approved")
+	if !strings.Contains(withPR, "pull request #12") || !strings.Contains(withPR, "incomplete") || strings.Contains(withPR, "branch `") {
+		t.Errorf("body with PR = %q", withPR)
+	}
+	if !strings.Contains(withPR, "approved") {
+		t.Errorf("body lost the approval instruction: %q", withPR)
+	}
+	plain, err := resolution.OutcomeExhausted(resolution.LimitTurns, "s", resolution.Usage{}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2, _ := resolution.NewCase("guy/repo", 7, req, t0)
+	if err := c2.RecordTriage(resolution.Triage{Size: resolution.Small, Rationale: "r", Model: "m", TriagedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c2.StartAttempt(resolution.Auto, b, "brief", t0); err != nil {
+		t.Fatal(err)
+	}
+	a2 := c2.OpenAttempt()
+	if err := c2.RecordOutcome(a2.ID, plain); err != nil {
+		t.Fatal(err)
+	}
+	without := OutcomeBody(c2, c2.Attempts()[0], "approved")
+	if !strings.Contains(without, "branch `autophage/7`") || strings.Contains(without, "pull request #") {
+		t.Errorf("body without PR = %q", without)
+	}
+}

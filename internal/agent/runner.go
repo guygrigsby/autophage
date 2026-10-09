@@ -502,7 +502,31 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	case StopTurns, StopWallClock, StopDiffLines:
 		// The Stop vocabulary and the Limit vocabulary are the same three
 		// words on purpose; keep them equal.
-		o, cerr := resolution.OutcomeExhausted(resolution.Limit(report.Stop), summary, report.Usage, r.now())
+		// A stop with committed, marker-free work still has something to
+		// review: open (or reuse) the partial pull request so the operator
+		// reads a PR, not a stranded branch. Best effort by design — a PR
+		// that will not open logs and degrades to the bare exhaustion, since
+		// turning a budget stop into an infrastructure failure would retry
+		// a run whose only remaining fact is that it ran out of budget.
+		var prNumber int
+		if head != ws.BaseSha {
+			if marked, err := r.conflictMarkers(pushCtx, m, ws); err != nil {
+				r.logf("runner %s: conflict check before partial pull request: %v", a.ID, err)
+			} else if !marked {
+				prNumber, err = r.openPullRequest(pushCtx, m, c, repo, head, summary, true)
+				if err != nil {
+					r.logf("runner %s: partial pull request: %v", a.ID, err)
+					prNumber = 0
+				}
+			}
+		}
+		var o resolution.Outcome
+		var cerr error
+		if prNumber != 0 {
+			o, cerr = resolution.OutcomeExhaustedWithPullRequest(resolution.Limit(report.Stop), prNumber, head, summary, report.Usage, r.now())
+		} else {
+			o, cerr = resolution.OutcomeExhausted(resolution.Limit(report.Stop), summary, report.Usage, r.now())
+		}
 		return r.settled(o, cerr, report.Usage), report.Stop, nil
 	}
 	if head == ws.BaseSha {
@@ -522,7 +546,7 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	// operator one pull request they open by hand from a branch that is
 	// already pushed, while a pull request carrying conflict markers is sent
 	// to somebody else's repository.
-	marked, err := timeStep(m, stepConflicts, func() (bool, error) { return r.Sandbox.ConflictMarkers(pushCtx, ws) })
+	marked, err := r.conflictMarkers(pushCtx, m, ws)
 	if err != nil {
 		return infra("conflict check", err, summary, report.Usage), report.Stop, nil
 	}
@@ -530,24 +554,62 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 		return failed(resolution.FailureAgent, "left unresolved conflict markers on the branch\n\n"+summary, report.Usage), report.Stop, nil
 	}
 
-	ghCtx, cancelGH := context.WithTimeout(pushCtx, githubTimeout)
-	defer cancelGH()
-	title := fmt.Sprintf("autophage: issue #%d", c.Number())
-	if detail, err := r.GitHub.GetIssue(ghCtx, c.Repository(), c.Number()); err != nil {
-		r.logf("runner %s: issue title: %v", a.ID, err)
-	} else if t := strings.TrimSpace(detail.Title); t != "" {
-		title = "autophage: " + truncate(t, 70)
-	}
-	body := fmt.Sprintf("%s\n\nFixes #%d", stripClosingKeywords(summary), c.Number())
-	pr, err := timeStep(m, stepPullRequest, func() (int, error) {
-		return r.GitHub.OpenPullRequest(ghCtx, c.Repository(), c.Branch(), repo.DefaultBranch, title, body)
-	})
+	pr, err := r.openPullRequest(pushCtx, m, c, repo, head, summary, false)
 	if err != nil {
 		// The branch is pushed, so a retry after approval resumes from it.
 		return infra("open pull request", err, summary, report.Usage), report.Stop, nil
 	}
 	o, cerr := resolution.OutcomePullRequest(pr, head, summary, report.Usage, r.now())
 	return r.settled(o, cerr, report.Usage), report.Stop, nil
+}
+
+// conflictMarkers reads whether the pushed tree still carries rebase
+// conflict markers, timed as the step it is on both paths that check it:
+// before the partial pull request of an exhausted run, and before the pull
+// request of a finished one.
+func (r *Runner) conflictMarkers(ctx context.Context, m Metrics, ws sandbox.Workspace) (bool, error) {
+	return timeStep(m, stepConflicts, func() (bool, error) { return r.Sandbox.ConflictMarkers(ctx, ws) })
+}
+
+// openPullRequest opens the attempt's pull request, or, when GitHub refuses
+// because a prior attempt on the same branch already opened one, returns
+// that pull request's number so a resumed attempt records the same PR.
+// partial says whether the run ended on a budget stop, which prefixes the
+// body so a reviewer sees the work is incomplete before reading the
+// summary's "what is left".
+func (r *Runner) openPullRequest(ctx context.Context, m Metrics, c *resolution.Case, repo resolution.Repository, head, summary string, partial bool) (int, error) {
+	ghCtx, cancelGH := context.WithTimeout(ctx, githubTimeout)
+	defer cancelGH()
+	title := fmt.Sprintf("autophage: issue #%d", c.Number())
+	if detail, err := r.GitHub.GetIssue(ghCtx, c.Repository(), c.Number()); err != nil {
+		r.logf("runner: issue title: %v", err)
+	} else if t := strings.TrimSpace(detail.Title); t != "" {
+		title = "autophage: " + truncate(t, 70)
+	}
+	body := fmt.Sprintf("%s\n\nFixes #%d", stripClosingKeywords(summary), c.Number())
+	if partial {
+		body = "Budget exhausted; this pull request carries the partial work.\n\n" + body
+	}
+	pr, err := timeStep(m, stepPullRequest, func() (int, error) {
+		return r.GitHub.OpenPullRequest(ghCtx, c.Repository(), c.Branch(), repo.DefaultBranch, title, body)
+	})
+	if err != nil {
+		found, ferr := timeStep(m, stepPullRequest, func() (int, error) {
+			pr, found, err := r.GitHub.PullRequestForBranch(ghCtx, c.Repository(), c.Branch())
+			if err != nil || !found {
+				if err == nil {
+					err = fmt.Errorf("no open pull request for branch %s", c.Branch())
+				}
+				return 0, err
+			}
+			return pr, nil
+		})
+		if ferr != nil {
+			return 0, err
+		}
+		return found, nil
+	}
+	return pr, nil
 }
 
 // errUnpushedBranch is a push that reported success and left the work on

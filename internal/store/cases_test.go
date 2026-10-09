@@ -362,3 +362,42 @@ func TestCreateCaseLeavesTheAggregateAloneWhenItRollsBack(t *testing.T) {
 		t.Errorf("conflict disturbed the aggregate: id %q changes %+v", second.ID(), second.Changes())
 	}
 }
+
+func TestExhaustionWithPullRequestRoundTrips(t *testing.T) {
+	s := storetest.Open(t)
+	seedRepo(t, s, "guy/repo")
+	newCase(t, s, 7, owner(t))
+	ctx := t.Context()
+	b, _ := resolution.NewBudget(10, time.Hour, 500)
+	var attemptID string
+	if _, err := s.UpdateCase(ctx, "guy/repo", 7, func(c *resolution.Case) error {
+		return c.RecordTriage(resolution.Triage{Size: resolution.Small, Rationale: "typo", Model: "m", TriagedAt: t0})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateCase(ctx, "guy/repo", 7, func(c *resolution.Case) error {
+		a, err := c.StartAttempt(resolution.Auto, b, "brief", t0)
+		attemptID = a.ID
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	o, err := resolution.OutcomeExhaustedWithPullRequest(resolution.LimitDiffLines, 12, "0123456789abcdef0123456789abcdef01234567", "partial", resolution.Usage{Turns: 9, DiffLines: 610}, t0.Add(5*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateCase(ctx, "guy/repo", 7, func(c *resolution.Case) error { return c.RecordOutcome(attemptID, o) }); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetCase(ctx, "guy/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := got.Attempts()[0].Outcome
+	if loaded == nil || loaded.Kind != resolution.BudgetExhausted || loaded.Limit != resolution.LimitDiffLines || loaded.PRNumber != 12 || loaded.HeadSha != "0123456789abcdef0123456789abcdef01234567" || loaded.Usage.DiffLines != 610 {
+		t.Errorf("loaded outcome = %+v", loaded)
+	}
+	if got.State() != resolution.AwaitingApproval {
+		t.Errorf("state = %s, want awaiting_approval: the partial PR does not finish the case", got.State())
+	}
+}

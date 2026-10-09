@@ -114,6 +114,10 @@ func (f *fakeGitHub) OpenPullRequest(context.Context, string, string, string, st
 	f.prs++
 	return f.prs, nil
 }
+
+func (f *fakeGitHub) PullRequestForBranch(context.Context, string, string) (int, bool, error) {
+	return 0, false, nil
+}
 func (f *fakeGitHub) EnsureLabel(_ context.Context, repo, name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

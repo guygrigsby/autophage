@@ -170,6 +170,17 @@ func attemptIDFor(ctx context.Context, tx pgx.Tx, caseID string, ordinal int) (s
 	return attemptID, nil
 }
 
+// nullablePR encodes an outcome's optional pull request as the two
+// nullable columns attempt_outcome_exhaustions takes: both nil when the
+// outcome carries no PR, which is the pre-amendment shape every
+// exhaustion without committed work keeps.
+func nullablePR(o resolution.Outcome) (pr, head any) {
+	if o.PRNumber == 0 {
+		return nil, nil
+	}
+	return o.PRNumber, o.HeadSha
+}
+
 func insertOutcome(ctx context.Context, tx pgx.Tx, caseID string, ordinal int, o resolution.Outcome) error {
 	attemptID, err := attemptIDFor(ctx, tx, caseID, ordinal)
 	if err != nil {
@@ -184,7 +195,8 @@ func insertOutcome(ctx context.Context, tx pgx.Tx, caseID string, ordinal int, o
 	case resolution.PullRequestOpened:
 		_, err = tx.Exec(ctx, `insert into attempt_outcome_pull_requests (attempt_id, kind, pr_number, head_sha) values ($1, $2, $3, $4)`, attemptID, string(o.Kind), o.PRNumber, o.HeadSha)
 	case resolution.BudgetExhausted:
-		_, err = tx.Exec(ctx, `insert into attempt_outcome_exhaustions (attempt_id, kind, limit_name) values ($1, $2, $3)`, attemptID, string(o.Kind), string(o.Limit))
+		pr, head := nullablePR(o)
+		_, err = tx.Exec(ctx, `insert into attempt_outcome_exhaustions (attempt_id, kind, limit_name, pr_number, head_sha) values ($1, $2, $3, $4, $5)`, attemptID, string(o.Kind), string(o.Limit), pr, head)
 	case resolution.FailedOutcome:
 		_, err = tx.Exec(ctx, `insert into attempt_outcome_failures (attempt_id, kind, class, message) values ($1, $2, $3, $4)`, attemptID, string(o.Kind), string(o.Class), o.Message)
 	case resolution.Aborted:

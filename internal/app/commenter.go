@@ -108,7 +108,12 @@ func OutcomeBody(c *resolution.Case, a resolution.Attempt, label string) string 
 	var head string
 	switch o.Kind {
 	case resolution.BudgetExhausted:
-		head = fmt.Sprintf("autophage attempt %d stopped: budget exhausted (%s). The work so far is on branch `%s`.", a.Ordinal, strings.ReplaceAll(string(o.Limit), "_", " "), c.Branch())
+		head = fmt.Sprintf("autophage attempt %d stopped: budget exhausted (%s).", a.Ordinal, strings.ReplaceAll(string(o.Limit), "_", " "))
+		if o.PRNumber != 0 {
+			head += fmt.Sprintf(" The partial work is in pull request #%d; it is incomplete until the approved run finishes.", o.PRNumber)
+		} else {
+			head += fmt.Sprintf(" The work so far is on branch `%s`.", c.Branch())
+		}
 	case resolution.FailedOutcome:
 		head = fmt.Sprintf("autophage attempt %d failed (%s).", a.Ordinal, o.Class)
 	case resolution.Aborted:

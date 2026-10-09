@@ -21,3 +21,21 @@ Both, in sequence.
 - Obvious calls ("rewrite the auth layer") cost one cheap model call. Everything else costs at most the auto budget before a human sees it, and the human sees findings, not a bare "this is big".
 - No work is lost on a budget stop. The approved attempt starts from where the auto attempt stopped.
 - Budget numbers are open and will need tuning against real issues.
+
+## Amendment: 2026-10-13 — exhaustion opens the partial work as a pull request
+
+The operator asked for a more permissive posture: a smarter attempt model
+(anthropic/claude-sonnet-5.5) under wider budgets, and no more changes
+stranded by a budget stop. "No work is lost on a budget stop" was already
+true of the bytes — the branch was pushed — but reviewing them meant
+opening the PR by hand, and the exhaustion comment read like an abort.
+
+Decision: when a budget stop leaves committed, pushed, marker-free work,
+the runner opens a pull request for it (or reuses the one a prior attempt
+on the same branch already opened) and records `pr_number`/`head_sha` on
+the `BudgetExhausted` outcome. The case still goes to AwaitingApproval:
+approval still re-queues, the approved attempt still resumes the same
+branch, and its PR is the same one. A stop with nothing committed, a tree
+with conflict markers, or a PR-open failure records the outcome without
+the PR, exactly as before — opening the partial PR is best effort and
+never turns an exhaustion into an infrastructure failure.

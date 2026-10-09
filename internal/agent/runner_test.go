@@ -186,6 +186,9 @@ type fakeGitHub struct {
 	issue  resolution.IssueDetail
 	branch string // DefaultBranch answer; empty means the enrolled one
 	prErr  error
+	// existingPR is what PullRequestForBranch answers: the open pull
+	// request a prior attempt on the same branch already opened.
+	existingPR int
 	// remintErr, when set, fails every mint after the first, so a test can
 	// drive the push that has to fall back to the token already in hand.
 	remintErr error
@@ -225,6 +228,15 @@ func (g *fakeGitHub) OpenPullRequest(_ context.Context, _, head, base, title, bo
 	defer g.mu.Unlock()
 	g.prs = append(g.prs, head+" -> "+base+": "+title+"\n"+body)
 	return 12, nil
+}
+
+// PullRequestForBranch answers existingPR, so a test can drive the resumed
+// attempt that finds the pull request a prior attempt already opened.
+func (g *fakeGitHub) PullRequestForBranch(_ context.Context, _, branch string) (int, bool, error) {
+	if g.existingPR != 0 {
+		return g.existingPR, true, nil
+	}
+	return 0, false, nil
 }
 
 func (g *fakeGitHub) EnsureLabel(context.Context, string, string) error { return nil }
@@ -557,7 +569,7 @@ func TestRunnerNoCommitsIsAgentFailure(t *testing.T) {
 	}
 }
 
-func TestRunnerBudgetExhaustedPushesAndParks(t *testing.T) {
+func TestRunnerBudgetExhaustedOpensPartialPullRequest(t *testing.T) {
 	st := storetest.Open(t)
 	id := startedAttempt(t, st, resolution.Auto)
 	sb := &fakeSandbox{commits: true}
@@ -569,9 +581,71 @@ func TestRunnerBudgetExhaustedPushesAndParks(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := c.Attempts()[0].Outcome
-	if c.State() != resolution.AwaitingApproval || o == nil || o.Kind != resolution.BudgetExhausted || o.Limit != resolution.LimitTurns || len(sb.pushed) != 1 || len(gh.pullRequests()) != 0 {
-		t.Errorf("state %s outcome %+v pushed %d prs %d", c.State(), o, len(sb.pushed), len(gh.pullRequests()))
+	// The stop still parks the case for approval, but the committed work is
+	// reviewable now: the outcome carries the partial pull request.
+	if c.State() != resolution.AwaitingApproval || o == nil || o.Kind != resolution.BudgetExhausted || o.Limit != resolution.LimitTurns || o.PRNumber != 12 || o.HeadSha != headSha || len(sb.pushed) != 1 {
+		t.Errorf("state %s outcome %+v pushed %d", c.State(), o, len(sb.pushed))
 	}
+	prs := gh.pullRequests()
+	if len(prs) != 1 || !strings.Contains(prs[0], "Budget exhausted; this pull request carries the partial work.") || !strings.Contains(prs[0], "Fixes #7") {
+		t.Errorf("partial pull request bodies = %q", prs)
+	}
+}
+
+func TestRunnerBudgetExhaustedWithoutCommitsOpensNoPullRequest(t *testing.T) {
+	st := storetest.Open(t)
+	id := startedAttempt(t, st, resolution.Auto)
+	sb := &fakeSandbox{commits: false}
+	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}}
+	r, _, _ := newRunner(t, st, sb, gh, scripted(100, goodSummary, nil))
+	r.Run(t.Context(), id)
+	c, err := st.GetCase(t.Context(), "guy/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Attempts()[0].Outcome
+	if c.State() != resolution.AwaitingApproval || o == nil || o.Kind != resolution.BudgetExhausted || o.PRNumber != 0 || len(gh.pullRequests()) != 0 {
+		t.Errorf("state %s outcome %+v prs %v", c.State(), o, gh.pullRequests())
+	}
+}
+
+func TestRunnerBudgetExhaustedReusesAnExistingPullRequest(t *testing.T) {
+	st := storetest.Open(t)
+	id := startedAttempt(t, st, resolution.Approved)
+	sb := &fakeSandbox{commits: true}
+	// Open fails (a prior attempt on the branch already opened the PR) and
+	// the lookup finds it: the outcome records the same pull request.
+	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}, prErr: errors.New("validation failed: A pull request already exists"), existingPR: 34}
+	r, _, _ := newRunner(t, st, sb, gh, scripted(100, goodSummary, nil))
+	r.Run(t.Context(), id)
+	c, err := st.GetCase(t.Context(), "guy/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Attempts()[0].Outcome
+	if c.State() != resolution.AwaitingApproval || o == nil || o.Kind != resolution.BudgetExhausted || o.PRNumber != 34 || o.HeadSha != headSha {
+		t.Errorf("state %s outcome %+v", c.State(), o)
+	}
+}
+
+func TestRunnerBudgetExhaustedPullRequestFailureIsBestEffort(t *testing.T) {
+	st := storetest.Open(t)
+	id := startedAttempt(t, st, resolution.Auto)
+	sb := &fakeSandbox{commits: true}
+	gh := &fakeGitHub{issue: resolution.IssueDetail{Title: "T", Body: "B", Open: true}, prErr: errors.New("github is down")}
+	r, _, logs := newRunner(t, st, sb, gh, scripted(100, goodSummary, nil))
+	r.Run(t.Context(), id)
+	c, err := st.GetCase(t.Context(), "guy/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := c.Attempts()[0].Outcome
+	// A PR that will not open degrades to the bare exhaustion; a budget
+	// stop is not an infrastructure failure and the branch is still pushed.
+	if c.State() != resolution.AwaitingApproval || o == nil || o.Kind != resolution.BudgetExhausted || o.PRNumber != 0 || len(sb.pushed) != 1 {
+		t.Errorf("state %s outcome %+v pushed %d", c.State(), o, len(sb.pushed))
+	}
+	assertLogged(t, logs, "partial pull request")
 }
 
 func TestRunnerInfraFailureAndTeardown(t *testing.T) {

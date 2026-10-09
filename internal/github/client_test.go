@@ -36,6 +36,7 @@ type fakeGitHub struct {
 	pulls         []map[string]any
 	labels        []map[string]any
 	labelMissing  bool
+	noPulls       bool
 	retryOnce     atomic.Bool
 	mintRetryOnce atomic.Bool
 }
@@ -85,6 +86,22 @@ func newFakeGitHub(t *testing.T) (*fakeGitHub, *httptest.Server) {
 		f.pulls = append(f.pulls, body)
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]any{"number": 12})
+	})
+	f.mux.HandleFunc("GET /repos/guy/repo/pulls", func(w http.ResponseWriter, r *http.Request) {
+		// The head filter must reach GitHub: without it the listing is the
+		// whole repository's open pull requests and the first hit is
+		// somebody else's.
+		if got := r.URL.Query().Get("head"); got != "guy:autophage/7" {
+			t.Errorf("head filter = %q", got)
+		}
+		if r.URL.Query().Get("state") != "open" {
+			t.Errorf("state = %q, want open", r.URL.Query().Get("state"))
+		}
+		if f.noPulls {
+			_ = json.NewEncoder(w).Encode([]any{})
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"number": 12, "head": map[string]any{"ref": "autophage/7"}}})
 	})
 	f.mux.HandleFunc("GET /repos/guy/repo/labels/approved", func(w http.ResponseWriter, r *http.Request) {
 		if f.labelMissing {
@@ -339,5 +356,19 @@ func TestEnsureLabelOnArchivedRepositoryIsReadOnly(t *testing.T) {
 	err := c.EnsureLabel(t.Context(), "guy/archived", "approved")
 	if !errors.Is(err, resolution.ErrRepositoryReadOnly) {
 		t.Fatalf("err = %v, want ErrRepositoryReadOnly", err)
+	}
+}
+
+func TestPullRequestForBranchFindsTheOpenHead(t *testing.T) {
+	f, srv := newFakeGitHub(t)
+	c := newTestClient(t, srv)
+	pr, found, err := c.PullRequestForBranch(t.Context(), "guy/repo", "autophage/7")
+	if err != nil || !found || pr != 12 {
+		t.Fatalf("result = %d %v %v, want 12 found", pr, found, err)
+	}
+	f.noPulls = true
+	pr, found, err = c.PullRequestForBranch(t.Context(), "guy/repo", "autophage/7")
+	if err != nil || found || pr != 0 {
+		t.Fatalf("empty listing = %d %v %v, want not found", pr, found, err)
 	}
 }

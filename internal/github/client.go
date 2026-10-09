@@ -212,6 +212,31 @@ func (c *Client) OpenPullRequest(ctx context.Context, repository, head, base, ti
 	return pr.GetNumber(), nil
 }
 
+// PullRequestForBranch finds the open pull request whose head is the branch.
+// Branches carry at most one open PR against a given base on GitHub, and the
+// head filter scopes the listing server-side, so the first hit is the answer.
+func (c *Client) PullRequestForBranch(ctx context.Context, repository, branch string) (int, bool, error) {
+	api, err := c.api(ctx, repository)
+	if err != nil {
+		return 0, false, err
+	}
+	owner, name := splitRepo(repository)
+	prs, _, err := api.PullRequests.List(ctx, owner, name, &gh.PullRequestListOptions{
+		Head:        owner + ":" + branch,
+		State:       "open",
+		ListOptions: gh.ListOptions{PerPage: 20},
+	})
+	if err != nil {
+		return 0, false, fmt.Errorf("github: list pull requests on %s: %w", repository, err)
+	}
+	for _, pr := range prs {
+		if pr.GetHead().GetRef() == branch {
+			return pr.GetNumber(), true, nil
+		}
+	}
+	return 0, false, nil
+}
+
 // EnsureLabel creates the label when it is missing. Idempotent.
 func (c *Client) EnsureLabel(ctx context.Context, repository, label string) error {
 	api, err := c.api(ctx, repository)

@@ -67,7 +67,8 @@ type Run struct {
 }
 
 // Outcome is a sum: Kind says which variant fields are meaningful.
-// PullRequestOpened: PRNumber, HeadSha. BudgetExhausted: Limit.
+// PullRequestOpened: PRNumber, HeadSha. BudgetExhausted: Limit, and
+// PRNumber/HeadSha when the partial work was opened as a PR.
 // Failed: Class, Message. Aborted: Reason. Summary is always set; for a
 // failure it is the message.
 type Outcome struct {
@@ -104,6 +105,27 @@ func OutcomeExhausted(limit Limit, summary string, u Usage, at time.Time) (Outco
 		return Outcome{}, Invalid("outcome summary is empty")
 	}
 	return Outcome{Kind: BudgetExhausted, EndedAt: at, Usage: u, Summary: summary, Limit: limit}, nil
+}
+
+// OutcomeExhaustedWithPullRequest is an exhaustion whose stop left
+// committed, marker-free work: the runner opened a pull request for it (or
+// reused the one a prior attempt on the same branch already opened), and
+// the partial work is reviewable immediately. The case still waits for
+// approval; the approved re-run resumes the same branch and the same PR.
+func OutcomeExhaustedWithPullRequest(limit Limit, prNumber int, headSha, summary string, u Usage, at time.Time) (Outcome, error) {
+	if _, err := ParseLimit(string(limit)); err != nil {
+		return Outcome{}, err
+	}
+	if prNumber < 1 {
+		return Outcome{}, Invalid("pull request number %d", prNumber)
+	}
+	if !shaRe.MatchString(headSha) {
+		return Outcome{}, Invalid("head sha %q", headSha)
+	}
+	if summary == "" {
+		return Outcome{}, Invalid("outcome summary is empty")
+	}
+	return Outcome{Kind: BudgetExhausted, EndedAt: at, Usage: u, Summary: summary, Limit: limit, PRNumber: prNumber, HeadSha: headSha}, nil
 }
 
 func OutcomeFailed(class FailureClass, message string, u Usage, at time.Time) (Outcome, error) {

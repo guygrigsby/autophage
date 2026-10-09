@@ -254,6 +254,8 @@ Variant fields:
 | PullRequestOpened | `prNumber` | int | The PR autophage opened |
 | PullRequestOpened | `headSha` | string | The pushed commit the PR points at |
 | BudgetExhausted | `limit` | Limit | Which limit ended it |
+| BudgetExhausted | `prNumber` | int, optional | The partial-work pull request the runner opened (or reused) when the stop left committed, marker-free work. Zero when there was nothing to review |
+| BudgetExhausted | `headSha` | string, optional | The pushed commit that PR points at. Set exactly when `prNumber` is |
 | Failed | `class` | FailureClass | Infra, Model or Agent |
 | Failed | `message` | string | The error |
 | Aborted | `reason` | AbortReason | IssueClosed, OperatorStop or DaemonRestart |
@@ -335,7 +337,7 @@ Value object. The complete prompt for one attempt. Built only by `BuildBrief`.
 
 ### Invariants
 
-`BuildBrief(case, repository, kind, budget, issueTitle, issueBody, prior *Outcome)` refuses an empty title or body and always includes, in order: who autophage is and that this is an unattended attempt on `repository` issue `number`; the requester's login and trust and the triage size when one exists; the branch; the budget numbers and that on exhaustion the run is stopped, the work is committed and pushed and a summary is required; the prior outcome's summary when resuming; the instruction to read the repo's `CLAUDE.md` or `AGENTS.md` first, commit as it goes and run the tests; the issue title and body verbatim, fenced as untrusted input; the fixed summary shape (what I found, what I did, what is left, what I would do with more budget).
+`BuildBrief(case, repository, kind, budget, issueTitle, issueBody, prior *Outcome)` refuses an empty title or body and always includes, in order: who autophage is and that this is an unattended attempt on `repository` issue `number`; the requester's login and trust and the triage size when one exists; the branch; the budget numbers and that on exhaustion the run is stopped, the work is committed and pushed and a summary is required, and that committed work is opened as a pull request; the prior outcome's summary when resuming; the instruction to read the repo's `CLAUDE.md` or `AGENTS.md` first, commit as it goes and run the tests; the issue title and body verbatim, fenced as untrusted input; the fixed summary shape (what I found, what I did, what is left, what I would do with more budget).
 
 ## Usage
 

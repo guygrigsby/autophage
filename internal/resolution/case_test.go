@@ -367,3 +367,19 @@ func TestAttemptElapsed(t *testing.T) {
 		t.Errorf("elapsed = %s", got)
 	}
 }
+
+func TestOutcomeExhaustedWithPullRequestValidates(t *testing.T) {
+	if _, err := OutcomeExhaustedWithPullRequest(LimitTurns, 0, "0123456789abcdef0123456789abcdef01234567", "s", Usage{}, t0); err == nil {
+		t.Error("pr 0 accepted")
+	}
+	if _, err := OutcomeExhaustedWithPullRequest(LimitTurns, 1, "short", "s", Usage{}, t0); err == nil {
+		t.Error("bad sha accepted")
+	}
+	if _, err := OutcomeExhaustedWithPullRequest(LimitTurns, 1, "0123456789abcdef0123456789abcdef01234567", "", Usage{}, t0); err == nil {
+		t.Error("empty summary accepted")
+	}
+	o, err := OutcomeExhaustedWithPullRequest(LimitDiffLines, 12, "0123456789abcdef0123456789abcdef01234567", "partial", Usage{}, t0)
+	if err != nil || o.Kind != BudgetExhausted || o.Limit != LimitDiffLines || o.PRNumber != 12 {
+		t.Errorf("outcome = %+v %v", o, err)
+	}
+}
