@@ -122,9 +122,15 @@ func (f *fixture) publish(t *testing.T, tag string, extra map[string][]byte, cor
 	f.assets.files = files
 	cs := checksummed(files)
 	if corruptChecksum {
-		cs = []byte(strings.Replace(string(cs), "d a e", "d a f", 1))
-		// replace first hex char so every hash mismatches
-		cs = []byte("0" + string(cs[1:]))
+		// Flip the first hex digit to a different digit; hardcoding
+		// "0" is a no-op on platforms where the hash already leads
+		// with 0 and the install silently succeeds.
+		cs = []byte(string(cs)[:strings.Index(string(cs), " ")])
+		if cs[0] == '0' {
+			cs[0] = '1'
+		} else {
+			cs[0] = '0'
+		}
 	}
 	f.assets.files["checksums.txt"] = cs
 	urls := map[string]string{}
