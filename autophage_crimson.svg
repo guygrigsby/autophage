@@ -1,0 +1,205 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Background Gradient: Deep Abyss with Dark Burgundy Radial Glow -->
+    <radialGradient id="bgGrad" cx="50%" cy="45%" r="65%">
+      <stop offset="0%" stop-color="#24070e"/>
+      <stop offset="45%" stop-color="#140407"/>
+      <stop offset="100%" stop-color="#050102"/>
+    </radialGradient>
+
+    <!-- Ambient Crimson Flare -->
+    <radialGradient id="ambientFlare" cx="50%" cy="40%" r="50%">
+      <stop offset="0%" stop-color="#e11d48" stop-opacity="0.25"/>
+      <stop offset="60%" stop-color="#9f1239" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Blood Red & Crimson Gradients -->
+    <linearGradient id="arterialGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff4d6d"/>
+      <stop offset="40%" stop-color="#e11d48"/>
+      <stop offset="100%" stop-color="#9f1239"/>
+    </linearGradient>
+
+    <linearGradient id="venousLoop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#881337"/>
+      <stop offset="50%" stop-color="#4c0519"/>
+      <stop offset="100%" stop-color="#991b1b"/>
+    </linearGradient>
+
+    <!-- Metal Facet Shading (Obsidian & Dried Blood Armor) -->
+    <linearGradient id="crownFacet" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f43f5e"/>
+      <stop offset="60%" stop-color="#be123c"/>
+      <stop offset="100%" stop-color="#881337"/>
+    </linearGradient>
+
+    <linearGradient id="plateRuby" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#9f1239"/>
+      <stop offset="100%" stop-color="#4c0519"/>
+    </linearGradient>
+
+    <linearGradient id="plateObsidianHi" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3f2026"/>
+      <stop offset="100%" stop-color="#241014"/>
+    </linearGradient>
+
+    <linearGradient id="plateObsidianMid" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#261014"/>
+      <stop offset="100%" stop-color="#140608"/>
+    </linearGradient>
+
+    <linearGradient id="plateObsidianDark" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#160507"/>
+      <stop offset="100%" stop-color="#080102"/>
+    </linearGradient>
+
+    <!-- Core Glowing Iris -->
+    <radialGradient id="eyeCoreGrad" cx="45%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="25%" stop-color="#ff758f"/>
+      <stop offset="60%" stop-color="#e11d48"/>
+      <stop offset="100%" stop-color="#881337"/>
+    </radialGradient>
+
+    <!-- Glow Filters -->
+    <filter id="crimsonGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="intenseBloodGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="deepBackdrop" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="28" result="blur"/>
+    </filter>
+  </defs>
+
+  <!-- Circular Outer Container -->
+  <rect width="512" height="512" fill="#050102"/>
+  <circle cx="256" cy="256" r="246" fill="url(#bgGrad)" stroke="#3f131b" stroke-width="3"/>
+
+  <!-- Ambient Blood Flare in Center -->
+  <circle cx="256" cy="220" r="160" fill="url(#ambientFlare)"/>
+
+  <!-- Autophagy Loop: High-Tech Arterial & Venous Orbital Rings -->
+  <g opacity="0.88">
+    <circle cx="256" cy="256" r="220" fill="none" stroke="#3f131b" stroke-width="1.5" stroke-dasharray="6 14" opacity="0.6"/>
+    <!-- Top Arc (Arterial Red Glow) -->
+    <path d="M 90 240 A 180 180 0 0 1 422 240" fill="none" stroke="url(#arterialGlow)" stroke-width="4.5" stroke-linecap="round" stroke-dasharray="210 25 40 20" filter="url(#crimsonGlow)"/>
+    <polygon points="422,228 436,245 417,253" fill="#ff4d6d" filter="url(#crimsonGlow)"/>
+
+    <!-- Bottom Arc (Deep Venous Crimson) -->
+    <path d="M 422 272 A 180 180 0 0 1 90 272" fill="none" stroke="url(#venousLoop)" stroke-width="4.5" stroke-linecap="round" stroke-dasharray="210 25 40 20" filter="url(#crimsonGlow)"/>
+    <polygon points="90,284 76,267 95,259" fill="#e11d48" filter="url(#crimsonGlow)"/>
+  </g>
+
+  <!-- ==================== BLOOD PHAGE BOT ==================== -->
+  <g id="blood-phage">
+
+    <!-- REAR LEGS (Deep Venous Silhouette) -->
+    <g fill="#140407" stroke="#881337" stroke-width="2.5" stroke-linejoin="round">
+      <polygon points="215,310 130,345 105,360 80,430 96,436 122,370 215,324"/>
+      <polygon points="297,310 382,345 407,360 432,430 416,436 390,370 297,324"/>
+    </g>
+
+    <!-- FRONT OUTER LEGS (Muscular, Carapaced Crimson Armor) -->
+    <!-- Front Left Outer Leg -->
+    <polygon points="220,315 142,370 128,364 148,344 226,304" fill="url(#plateObsidianHi)" stroke="#f43f5e" stroke-width="2.5" stroke-linejoin="round"/>
+    <circle cx="136" cy="366" r="12" fill="#180408" stroke="#ff4d6d" stroke-width="2.5" filter="url(#crimsonGlow)"/>
+    <circle cx="136" cy="366" r="5" fill="#ff4d6d"/>
+    <polygon points="132,375 108,460 125,463 144,378" fill="url(#plateObsidianMid)" stroke="#e11d48" stroke-width="2.5" stroke-linejoin="round"/>
+    <polygon points="102,460 130,460 116,475" fill="#ff4d6d" filter="url(#crimsonGlow)"/>
+
+    <!-- Front Right Outer Leg -->
+    <polygon points="292,315 370,370 384,364 364,344 286,304" fill="url(#plateRuby)" stroke="#f43f5e" stroke-width="2.5" stroke-linejoin="round"/>
+    <circle cx="376" cy="366" r="12" fill="#180408" stroke="#ff4d6d" stroke-width="2.5" filter="url(#crimsonGlow)"/>
+    <circle cx="376" cy="366" r="5" fill="#ff4d6d"/>
+    <polygon points="380,375 404,460 387,463 368,378" fill="url(#plateObsidianMid)" stroke="#e11d48" stroke-width="2.5" stroke-linejoin="round"/>
+    <polygon points="410,460 382,460 396,475" fill="#ff4d6d" filter="url(#crimsonGlow)"/>
+
+    <!-- FRONT INNER LEGS -->
+    <!-- Front Left Inner Leg -->
+    <polygon points="238,325 186,400 200,404 246,332" fill="url(#plateObsidianMid)" stroke="#be123c" stroke-width="2"/>
+    <polygon points="187,400 172,466 186,468 199,404" fill="url(#plateObsidianDark)" stroke="#be123c" stroke-width="2"/>
+    <circle cx="193" cy="402" r="7" fill="#180408" stroke="#fb7185" stroke-width="2"/>
+    <polygon points="166,466 190,466 178,478" fill="#f43f5e"/>
+
+    <!-- Front Right Inner Leg -->
+    <polygon points="274,325 326,400 312,404 266,332" fill="url(#plateObsidianMid)" stroke="#be123c" stroke-width="2"/>
+    <polygon points="325,400 340,466 326,468 313,404" fill="url(#plateObsidianDark)" stroke="#be123c" stroke-width="2"/>
+    <circle cx="319" cy="402" r="7" fill="#180408" stroke="#fb7185" stroke-width="2"/>
+    <polygon points="346,466 322,466 334,478" fill="#f43f5e"/>
+
+    <!-- BASE PLATE & CONNECTOR -->
+    <polygon points="208,306 304,306 290,332 222,332" fill="#24070d" stroke="#ff4d6d" stroke-width="2.5" stroke-linejoin="round"/>
+    <line x1="230" y1="319" x2="282" y2="319" stroke="#fda4af" stroke-width="2.5" filter="url(#crimsonGlow)"/>
+
+    <!-- HYDRAULIC SPINAL COLUMN (3 Glowing Blood Rings) -->
+    <rect x="232" y="228" width="48" height="80" rx="6" fill="#0d0204" stroke="#3f131b" stroke-width="2.5"/>
+    <g filter="url(#crimsonGlow)">
+      <rect x="225" y="240" width="62" height="10" rx="4" fill="#e11d48" stroke="#ffe4e6" stroke-width="1.2"/>
+      <rect x="225" y="264" width="62" height="10" rx="4" fill="#e11d48" stroke="#ffe4e6" stroke-width="1.2"/>
+      <rect x="225" y="288" width="62" height="10" rx="4" fill="#e11d48" stroke="#ffe4e6" stroke-width="1.2"/>
+    </g>
+
+    <!-- COLLAR -->
+    <polygon points="212,224 300,224 290,238 222,238" fill="#3f131b" stroke="#ff4d6d" stroke-width="2.5"/>
+
+    <!-- ==================== CAPSID HEAD ==================== -->
+    <g stroke="#e11d48" stroke-width="3" stroke-linejoin="round">
+      <!-- TOP CROWN -->
+      <polygon points="256,40 204,118 308,118" fill="url(#crownFacet)"/>
+
+      <!-- UPPER FACETS -->
+      <polygon points="256,40 152,96 204,118" fill="url(#plateRuby)"/>
+      <polygon points="256,40 360,96 308,118" fill="url(#plateObsidianHi)"/>
+
+      <!-- MID OUTER FACETS -->
+      <polygon points="152,96 182,148 204,118" fill="url(#plateObsidianMid)"/>
+      <polygon points="152,96 152,190 182,148" fill="url(#plateObsidianDark)"/>
+      <polygon points="152,190 204,178 182,148" fill="url(#plateObsidianDark)"/>
+
+      <polygon points="360,96 308,118 330,148" fill="url(#plateObsidianHi)"/>
+      <polygon points="360,96 330,148 360,190" fill="url(#plateObsidianMid)"/>
+      <polygon points="360,190 330,148 308,178" fill="url(#plateObsidianMid)"/>
+
+      <!-- CHIN FACETS -->
+      <polygon points="152,190 256,226 204,178" fill="url(#plateObsidianDark)"/>
+      <polygon points="204,178 256,226 308,178" fill="url(#plateObsidianMid)"/>
+      <polygon points="360,190 308,178 256,226" fill="url(#plateObsidianDark)"/>
+
+      <!-- VISOR FRAME (Hexagon) -->
+      <polygon points="204,118 308,118 330,148 308,178 204,178 182,148" fill="#080103" stroke="#ff4d6d" stroke-width="3.5" filter="url(#crimsonGlow)"/>
+    </g>
+
+    <!-- ==================== GLOWING APERTURE / BLOOD EYE ==================== -->
+    <circle cx="256" cy="148" r="36" fill="#050102" stroke="#be123c" stroke-width="2.5"/>
+    <circle cx="256" cy="148" r="30" fill="#20050c" stroke="#ff4d6d" stroke-width="2" filter="url(#crimsonGlow)"/>
+
+    <!-- Aperture Blades (Mechanical Iris) -->
+    <g stroke="#9f1239" stroke-width="2" opacity="0.85">
+      <line x1="238" y1="126" x2="274" y2="126"/>
+      <line x1="274" y1="126" x2="284" y2="148"/>
+      <line x1="284" y1="148" x2="268" y2="170"/>
+      <line x1="268" y1="170" x2="234" y2="170"/>
+      <line x1="234" y1="170" x2="226" y2="142"/>
+    </g>
+
+    <!-- Glowing Arterial Core Lens -->
+    <circle cx="256" cy="148" r="22" fill="#e11d48" filter="url(#intenseBloodGlow)" opacity="0.7"/>
+    <circle cx="256" cy="148" r="15" fill="url(#eyeCoreGrad)" filter="url(#crimsonGlow)"/>
+    <circle cx="256" cy="148" r="8" fill="#ffe4e6" filter="url(#crimsonGlow)"/>
+    <circle cx="256" cy="148" r="3.5" fill="#ffffff"/>
+    <ellipse cx="250" cy="141" rx="4" ry="2" fill="#ffffff" opacity="0.95"/>
+  </g>
+</svg>
