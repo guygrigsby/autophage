@@ -92,3 +92,24 @@ func TestWhoamiRequiresToken(t *testing.T) {
 		t.Errorf("with token: code = %d, want 200", rec.Code)
 	}
 }
+
+// The deploy webhook exists only when wired: a daemon without push-to-deploy
+// configured must not answer it.
+func TestDeployWebhookRoutedOnlyWhenWired(t *testing.T) {
+	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	with := New(t.TempDir(), nil, Deps{Deploy: stub})
+	r := httptest.NewRequest("POST", "/webhook/deploy", nil)
+	w := httptest.NewRecorder()
+	with.ServeHTTP(w, r)
+	if w.Code != http.StatusTeapot {
+		t.Errorf("wired: %d", w.Code)
+	}
+	without := New(t.TempDir(), nil, Deps{})
+	w = httptest.NewRecorder()
+	without.ServeHTTP(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("unwired: %d, want 404", w.Code)
+	}
+}

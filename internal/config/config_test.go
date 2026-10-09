@@ -54,3 +54,24 @@ func TestLoadSecretsRequiresTheWebhookSecret(t *testing.T) {
 		t.Errorf("secrets = %+v %v", s, err)
 	}
 }
+
+// deploy.repo is optional but must be owner/name when present.
+func TestValidateDeployRepo(t *testing.T) {
+	c := complete()
+	if _, err := c.Validate(); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	for _, bad := range []string{"guygrigsby", "a/b/c", " /x", "x/ ", ""} {
+		if bad == "" {
+			continue
+		}
+		c.Deploy.Repo = bad
+		if _, err := c.Validate(); err == nil || !strings.Contains(err.Error(), "deploy.repo") {
+			t.Errorf("repo %q: %v", bad, err)
+		}
+	}
+	c.Deploy.Repo = "guygrigsby/autophage"
+	if _, err := c.Validate(); err != nil {
+		t.Errorf("valid repo: %v", err)
+	}
+}

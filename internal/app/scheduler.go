@@ -41,6 +41,10 @@ type Scheduler struct {
 	Clock       resolution.Clock
 	Budgets     BudgetPolicy
 	GitHub      resolution.GitHub
+	// OnDone, when set, fires after an attempt's runner returned. The
+	// daemon wires it to the deploy hook so an installed release cuts
+	// over at the first idle moment.
+	OnDone func()
 
 	wg sync.WaitGroup
 
@@ -171,15 +175,21 @@ func (s *Scheduler) backstop(ctx context.Context, attemptID string) {
 
 func (s *Scheduler) mark(attemptID string, running bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.running == nil {
 		s.running = map[string]struct{}{}
 	}
 	if running {
 		s.running[attemptID] = struct{}{}
+		s.mu.Unlock()
 		return
 	}
 	delete(s.running, attemptID)
+	s.mu.Unlock()
+	// OnDone fires outside the lock: the daemon wires it to the deploy
+	// hook, whose idle check reads Running() right back.
+	if attemptID != "" && s.OnDone != nil {
+		s.OnDone()
+	}
 }
 
 // Running lists the attempts whose runner has not returned, for the

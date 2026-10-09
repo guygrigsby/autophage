@@ -22,3 +22,57 @@ jobs:
         run: make check
       - name: make test
         run: make test
+
+  # Every green push to main is a point release: the tag is the next patch
+  # after the highest existing v-tag, binaries are stamped with it, and the
+  # release webhook on the deploy host installs them (ADR 0009).
+  release:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Serialized so two pushes in quick succession compute different tags;
+    # the second run sees the first run's tag when it picks the next one.
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: next tag
+        id: tag
+        run: |
+          git fetch --tags
+          latest=$(git tag -l 'v*' | sort -V | tail -1)
+          if [ -z "$latest" ]; then
+            echo "tag=v0.0.1" >> "$GITHUB_OUTPUT"
+          else
+            minor=${latest%.*}
+            patch=${latest##*.}
+            echo "tag=${minor}.$((patch + 1))" >> "$GITHUB_OUTPUT"
+          fi
+      - name: build
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for platform in linux/amd64 darwin/arm64; do
+            goos=${platform%/*}; goarch=${platform#*/}
+            for cmd in autophaged autophage; do
+              CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch \
+                go build -trimpath -ldflags "-X main.version=$TAG" \
+                -o "dist/$cmd-$goos-$goarch" "./cmd/$cmd"
+            done
+          done
+          (cd dist && sha256sum autophage* > checksums.txt)
+      - name: release
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "$TAG" --generate-notes

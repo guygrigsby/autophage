@@ -245,3 +245,71 @@ func TestSchedulerSkipsClosedIssue(t *testing.T) {
 		t.Errorf("state = %s", c.State())
 	}
 }
+
+// TestSchedulerFiresOnDoneAfterARunnerReturns is the deploy hook's trigger:
+// whatever ends an attempt must tell the hook, or a deferred deploy never
+// cuts over.
+func TestSchedulerFiresOnDoneAfterARunnerReturns(t *testing.T) {
+	st := storetest.Open(t)
+	queueCases(t, st, 1)
+	gh := &fakeGitHub{issues: map[string]resolution.IssueDetail{keyOf("guy/repo", 1): issue(true)}}
+	runner := &fakeRunner{release: make(chan struct{})}
+	done := make(chan struct{}, 2)
+	s := &Scheduler{Store: st, Runner: runner, Concurrency: 1, Clock: fixedClock{t0}, Budgets: policy(t), GitHub: gh, OnDone: func() { done <- struct{}{} }}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if err := s.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+		t.Fatal("OnDone fired before the runner returned")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(runner.release)
+	s.Wait()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnDone never fired")
+	}
+}
+
+// TestSchedulerOnDoneReadsRunningDeadlock is the wiring the daemon ships:
+// the hook answers by reading Running() back. If mark ever fired it while
+// still holding its lock, every deploy cut-over would hang the runner
+// goroutine; the watchdog fails instead of the test hanging.
+func TestSchedulerOnDoneReadsRunningDeadlock(t *testing.T) {
+	st := storetest.Open(t)
+	queueCases(t, st, 1)
+	gh := &fakeGitHub{issues: map[string]resolution.IssueDetail{keyOf("guy/repo", 1): issue(true)}}
+	runner := &fakeRunner{release: make(chan struct{})}
+	done := make(chan struct{})
+	var s *Scheduler
+	s = &Scheduler{Store: st, Runner: runner, Concurrency: 1, Clock: fixedClock{t0}, Budgets: policy(t), GitHub: gh,
+		OnDone: func() {
+			select {
+			case <-done:
+			default:
+				close(done)
+			}
+			_ = s.Running()
+		}}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	if err := s.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	watchdog := time.AfterFunc(5*time.Second, func() {
+		cancel()
+		panic("OnDeadlocked against Running(): mark held its lock")
+	})
+	defer watchdog.Stop()
+	close(runner.release)
+	s.Wait()
+	select {
+	case <-done:
+	default:
+		t.Fatal("OnDone never fired")
+	}
+}

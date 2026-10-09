@@ -21,6 +21,7 @@ type Config struct {
 	Sandbox SandboxConfig `toml:"sandbox"`
 	Label   LabelConfig   `toml:"label"`
 	Upkeep  UpkeepConfig  `toml:"upkeep"`
+	Deploy  DeployConfig  `toml:"deploy"`
 }
 
 type DBConfig struct {
@@ -120,9 +121,21 @@ func Default() Config {
 	}
 }
 
+// DeployConfig is push-to-deploy. An empty Repo disables the whole
+// mechanism; setting it requires AUTOPHAGE_DEPLOY_WEBHOOK_SECRET in the
+// environment.
+type DeployConfig struct {
+	Repo       string `toml:"repo"`
+	InstallDir string `toml:"install_dir"`
+}
+
 // Secrets are the values that never live in the file.
 type Secrets struct {
 	WebhookSecret []byte
+	// DeployWebhookSecret verifies the repo's release webhook. It is a
+	// host-execution secret, deliberately separate from the App's webhook
+	// secret, and only required when [deploy] repo is set.
+	DeployWebhookSecret []byte
 }
 
 // LoadSecrets reads the environment. The webhook secret is required to run
@@ -133,7 +146,7 @@ func LoadSecrets() (Secrets, error) {
 	if ws == "" {
 		return Secrets{}, errors.New("AUTOPHAGE_GITHUB_WEBHOOK_SECRET is not set")
 	}
-	return Secrets{WebhookSecret: []byte(ws)}, nil
+	return Secrets{WebhookSecret: []byte(ws), DeployWebhookSecret: []byte(os.Getenv("AUTOPHAGE_DEPLOY_WEBHOOK_SECRET"))}, nil
 }
 
 // Budgets is everything Validate turns the file into: the domain budgets and
@@ -164,6 +177,12 @@ func (c Config) Validate() (Budgets, error) {
 	}
 	if c.GitHub.OperatorLogin == "" {
 		errs = append(errs, errors.New("github.operator_login is required"))
+	}
+	if r := c.Deploy.Repo; r != "" {
+		parts := strings.Split(r, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" || strings.ContainsAny(r, " \t") {
+			errs = append(errs, fmt.Errorf("deploy.repo must be owner/name, got %q", r))
+		}
 	}
 	for name, tier := range map[string]ModelTier{"triage": c.Model.Triage, "auto": c.Model.Auto, "approved": c.Model.Approved, "repair": c.Model.Repair} {
 		if tier.Model == "" {

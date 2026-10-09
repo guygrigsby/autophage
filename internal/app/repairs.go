@@ -49,6 +49,9 @@ type RepairScheduler struct {
 	// login can be renamed and the old one re-registered; this is the moment
 	// autophage is about to push, so it is the moment worth checking.
 	DependabotLogin string
+	// OnDone, when set, fires after a repair round's runner returned, the
+	// repair half of Scheduler.OnDone.
+	OnDone func()
 
 	wg sync.WaitGroup
 
@@ -204,15 +207,21 @@ func (s *RepairScheduler) backstop(ctx context.Context, repairID string) {
 
 func (s *RepairScheduler) mark(repairID string, running bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.running == nil {
 		s.running = map[string]struct{}{}
 	}
 	if running {
 		s.running[repairID] = struct{}{}
+		s.mu.Unlock()
 		return
 	}
 	delete(s.running, repairID)
+	s.mu.Unlock()
+	// Outside the lock, same as Scheduler.mark: the deploy hook's idle
+	// check reads Running() right back.
+	if repairID != "" && s.OnDone != nil {
+		s.OnDone()
+	}
 }
 
 // Running lists the rounds whose runner has not returned, for the shutdown

@@ -44,6 +44,8 @@ Copy `config.example.toml` to `~/.config/autophage/config.toml`. The webhook sec
 
 See [docs/runbooks/deploy.md](docs/runbooks/deploy.md) for the full first-deployment runbook (Postgres setup, the GitHub App, Funnel, systemd). Summary below.
 
+With push-to-deploy on (ADR 0009, runbook step 9b), every green push to main is a CI point release and the deploy host installs it from the repo's release webhook, restarting when idle. The manual steps below are the first deploy only.
+
 Postgres runs natively (one database holds autophage's tables and jess's ledger tables). Write `~/.config/autophage/env` (mode 0600, values from your secret store) with:
 
 ```
@@ -85,4 +87,4 @@ tailscale serve --bg --set-path /metrics http://127.0.0.1:8080/metrics
 
 - [Design](docs/specs/2026-09-04-autophage-design.md), [domain model](docs/specs/2026-09-04-autophage-domain-model.md), [contracts](docs/specs/2026-09-04-autophage-contracts.md), [context map](docs/specs/2026-09-04-autophage-context-map.md).
 - [Deployment runbook](docs/runbooks/deploy.md): first live deployment, step by step.
-- ADRs in `docs/adr/`: [0001 jess as agent harness](docs/adr/0001-jess-as-agent-harness.md), [0002 sandbox posture](docs/adr/0002-sandbox-posture.md), [0003 trust gate and approval label](docs/adr/0003-trust-gate-and-approval-label.md), [0004 GitHub App webhooks and deployment](docs/adr/0004-github-app-webhooks-and-deployment.md), [0005 budgeted attempt with triage](docs/adr/0005-budgeted-attempt-with-triage.md), [0006 OpenRouter as model provider](docs/adr/0006-openrouter-as-model-provider.md) (superseded by [0008 Aperture as model gateway](docs/adr/0008-aperture-as-model-gateway.md)), [0007 Dependabot bumps as an upkeep context](docs/adr/0007-dependabot-bumps-as-an-upkeep-context.md), [0008 Aperture as model gateway](docs/adr/0008-aperture-as-model-gateway.md).
+- ADRs in `docs/adr/`: [0001 jess as agent harness](docs/adr/0001-jess-as-agent-harness.md), [0002 sandbox posture](docs/adr/0002-sandbox-posture.md), [0003 trust gate and approval label](docs/adr/0003-trust-gate-and-approval-label.md), [0004 GitHub App webhooks and deployment](docs/adr/0004-github-app-webhooks-and-deployment.md), [0005 budgeted attempt with triage](docs/adr/0005-budgeted-attempt-with-triage.md), [0006 OpenRouter as model provider](docs/adr/0006-openrouter-as-model-provider.md) (superseded by [0008 Aperture as model gateway](docs/adr/0008-aperture-as-model-gateway.md)), [0007 Dependabot bumps as an upkeep context](docs/adr/0007-dependabot-bumps-as-an-upkeep-context.md), [0008 Aperture as model gateway](docs/adr/0008-aperture-as-model-gateway.md), [0009 push-to-deploy via release webhook](docs/adr/0009-push-to-deploy-via-release-webhook.md).

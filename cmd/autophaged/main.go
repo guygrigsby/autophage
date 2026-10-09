@@ -8,8 +8,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/guygrigsby/jess/ledger"
@@ -21,6 +23,7 @@ import (
 	"github.com/guygrigsby/autophage/internal/api"
 	"github.com/guygrigsby/autophage/internal/app"
 	appconfig "github.com/guygrigsby/autophage/internal/config"
+	"github.com/guygrigsby/autophage/internal/deploy"
 	"github.com/guygrigsby/autophage/internal/github"
 	"github.com/guygrigsby/autophage/internal/resolution"
 	"github.com/guygrigsby/autophage/internal/sandbox"
@@ -111,6 +114,43 @@ func main() {
 		Canceller:  runner,
 		Metrics:    api.SweepMetrics{},
 	}
+	// Push-to-deploy: when deploy.repo is configured the release webhook is
+	// served, and an installed release restarts the daemon at the first
+	// idle moment (a deferred restart waits for the last runner, so an
+	// attempt is never aborted just to deploy).
+	var deployHandler http.Handler
+	var maybeRestart func()
+	if cfg.Deploy.Repo != "" {
+		if len(secrets.DeployWebhookSecret) == 0 {
+			log.Fatal("deploy.repo is set but AUTOPHAGE_DEPLOY_WEBHOOK_SECRET is not set")
+		}
+		installDir := cfg.Deploy.InstallDir
+		if installDir == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				log.Fatalf("deploy: default install dir: %v", err)
+			}
+			installDir = filepath.Join(home, ".local", "bin")
+		}
+		dep := &deploy.Handler{
+			Repo: cfg.Deploy.Repo, Secret: secrets.DeployWebhookSecret, Version: version,
+			InstallDir: installDir, Client: &http.Client{Timeout: 2 * time.Minute}, Logf: log.Printf,
+			Idle: func() bool {
+				return len(dispatcher.Scheduler.Running()) == 0 &&
+					(dispatcher.RepairScheduler == nil || len(dispatcher.RepairScheduler.Running()) == 0)
+			},
+			// SIGTERM to self: the graceful path drains and systemd's
+			// Restart=always brings the new binary up.
+			Restart: func() { _ = syscall.Kill(syscall.Getpid(), syscall.SIGTERM) },
+		}
+		deployHandler = dep
+		maybeRestart = dep.MaybeRestart
+		scheduler.OnDone = maybeRestart
+		log.Printf("deploy: on, releases from %s install to %s", cfg.Deploy.Repo, installDir)
+	} else {
+		log.Print("deploy: off (deploy.repo is empty)")
+	}
+
 	// stopRepair stays nil while upkeep is off, and the stop endpoint then
 	// answers that the round is not running here.
 	var stopRepair func(string) bool
@@ -132,6 +172,9 @@ func main() {
 			Clock: clock, Budgets: app.BudgetPolicy{Repair: budgets.Repair}, RoundCap: budgets.RoundCap,
 			DependabotLogin: cfg.Upkeep.DependabotLogin,
 		}
+		if maybeRestart != nil {
+			dispatcher.RepairScheduler.OnDone = maybeRestart
+		}
 		dispatcher.RepairCanceller = repairer
 		stopRepair = repairer.Stop
 		log.Printf("upkeep: on for dependabot pull requests (round cap %d, check window %s)", budgets.RoundCap, budgets.CheckWindow)
@@ -140,6 +183,7 @@ func main() {
 	handler := api.New(dir, rootapp.Static(), api.Deps{
 		Base: ctx, Store: st, GitHub: gh, Clock: clock, OperatorLogin: cfg.GitHub.OperatorLogin,
 		Webhook: github.WebhookHandler(st, secrets.WebhookSecret, clock),
+		Deploy:  deployHandler,
 		Sweep:   dispatcher.Sweep, Ledger: pg, Stop: runner.Stop, StopRepair: stopRepair,
 		Version: version, StartedAt: clock.Now(), Concurrency: cfg.Sandbox.Concurrency,
 	})

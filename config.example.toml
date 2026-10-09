@@ -29,6 +29,15 @@ model = "anthropic/claude-sonnet-5"
 [model.repair]
 model = "qwen-27b"
 
+# Push-to-deploy (ADR 0009). When repo is set and
+# AUTOPHAGE_DEPLOY_WEBHOOK_SECRET is in the environment, the daemon serves
+# POST /webhook/deploy: a published release from this repo is installed
+# over the running binaries and the daemon restarts itself when idle.
+# Empty repo disables the endpoint.
+[deploy]
+repo = "guygrigsby/autophage"
+# install_dir = "~/.local/bin"          # default when commented out
+
 [budget.auto]
 turns      = 80
 wall_clock = "90m"

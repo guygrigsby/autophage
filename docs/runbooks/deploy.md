@@ -149,6 +149,14 @@ did).
 ssh <host> tailscale funnel --bg --set-path /webhook/github http://127.0.0.1:8080/webhook/github
 ```
 
+When push-to-deploy is on (step 9b), Funnel carries the release webhook too:
+
+```bash
+ssh <host> tailscale funnel --bg --set-path /webhook/deploy http://127.0.0.1:8080/webhook/deploy
+```
+
+(8080 is the default listen port; use the port from the host's `listen` config.)
+
 If the tailnet ACL refuses Funnel on the deploy host (**operator**, admin console):
 
 ```json
@@ -269,6 +277,48 @@ the open ones alone.
 A repository whose pull requests run no checks at all will see every bump
 abandoned `checks_never_concluded` after the window: that is working as
 designed, not a fault, and the fix is to not watch that repository.
+
+## 9b. Push-to-deploy (operator, optional)
+
+After this step every green push to main deploys itself (ADR 0009). One-time
+setup:
+
+1. Append to `~/.config/autophage/env` on the deploy host (a fresh value,
+   not the App webhook secret):
+
+   ```
+   AUTOPHAGE_DEPLOY_WEBHOOK_SECRET=<deploy webhook secret>
+   ```
+
+2. Add to `~/.config/autophage/config.toml`:
+
+   ```toml
+   [deploy]
+   repo = "<owner>/<repo>"
+   # install_dir defaults to ~/.local/bin
+   ```
+
+3. Funnel the deploy path (step 7).
+
+4. Create the repository webhook, subscribed to the `release` event only:
+
+   ```bash
+   gh api repos/<owner>/<repo>/hooks -f url='https://<host>.<tailnet>.ts.net/webhook/deploy'      -f content_type='json' -f secret="$AUTOPHAGE_DEPLOY_WEBHOOK_SECRET"      -F active=true --input - <<'EOF'
+   {"events": ["release"]}
+   EOF
+   ```
+
+5. Restart the daemon (`systemctl --user restart autophaged`); the log says
+   `deploy: on`.
+
+**Verify:** push any change to main, wait for the `release` job in CI to
+publish a `vX.Y.Z`, then on the deploy host watch the journal: `deploy:
+installed ... vX.Y.Z` and a restart into `autophaged vX.Y.Z`. The version in
+`autophage status` output is the release tag.
+
+Bootstrap note: the webhook handler ships in the build it deploys, so the
+first deploy after enabling this is manual (`git pull && make install-systemd`
+on the host). Everything after that is automatic.
 
 ## 10. Metrics (operator on the Prometheus host)
 

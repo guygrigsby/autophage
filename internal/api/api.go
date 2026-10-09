@@ -33,9 +33,12 @@ type Deps struct {
 	Clock         resolution.Clock
 	OperatorLogin string
 	Webhook       http.Handler
-	Sweep         func(context.Context)
-	Ledger        ledger.Reader
-	Stop          func(attemptID string) bool
+	// Deploy, when non-nil, serves POST /webhook/deploy: the repo's
+	// release webhook that installs new binaries and restarts the daemon.
+	Deploy http.Handler
+	Sweep  func(context.Context)
+	Ledger ledger.Reader
+	Stop   func(attemptID string) bool
 	// StopRepair cancels a running repair round. Nil when upkeep is off,
 	// which makes the stop endpoint answer that the round is not running
 	// here rather than 404: the round may well exist, just not on a daemon
@@ -93,6 +96,12 @@ func New(dir string, static fs.FS, d Deps) http.Handler {
 
 	if d.Webhook != nil {
 		mux.Handle("POST /webhook/github", d.Webhook)
+	}
+
+	// The deploy webhook is routed only when the daemon is configured for
+	// push-to-deploy; otherwise the endpoint does not exist at all.
+	if d.Deploy != nil {
+		mux.Handle("POST /webhook/deploy", d.Deploy)
 	}
 
 	if d.Store != nil {
