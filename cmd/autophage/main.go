@@ -12,10 +12,14 @@ import (
 // appID is the program id perch uses for env-var and config-path derivation.
 const appID = "autophage"
 
+// version is stamped at build time (Makefile cli-build, CI release job).
+var version = "dev"
+
 var cliFlags *client.Flags
 
 func newRootCmd() *cobra.Command {
 	root, f := client.Root(appID, "autophage CLI", "Talks to a running daemon.", configuredAddr())
+	root.Version = version
 	cliFlags = f
 	root.AddCommand(newAuthCmd(), newWhoamiCmd(), newStatusCmd(), newCasesCmd(), newCaseCmd(), newRunCmd(), newStopCmd(), newWhyCmd(),
 		newBumpsCmd(), newBumpCmd(), newRetryCmd(), newWatchCmd(), newUnwatchCmd(), newStopRepairCmd())

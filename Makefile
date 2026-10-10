@@ -42,7 +42,7 @@ server-build: ## Build the autophaged daemon (embeds web/dist)
 	go build -ldflags "-X main.version=$$(git describe --tags --always --dirty)" -o $(APP)d ./cmd/autophaged
 
 cli-build: ## Build the app CLI
-	go build -o $(APP) ./cmd/autophage
+	go build -ldflags "-X main.version=$$(git describe --tags --always --dirty)" -o $(APP) ./cmd/autophage
 
 toolbox-build: ## Build the sandbox toolbox
 	go build -o autophage-toolbox ./cmd/autophage-toolbox

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/guygrigsby/perch/client"
@@ -43,5 +45,18 @@ func TestAuthLoginWritesToken(t *testing.T) {
 	}
 	if filepath.Base(path) != "cli.token" {
 		t.Errorf("unexpected token path %q", path)
+	}
+}
+
+func TestRootHasVersion(t *testing.T) {
+	var out bytes.Buffer
+	root := newRootCmd()
+	root.SetOut(&out)
+	root.SetArgs([]string{"--version"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(out.String(), "autophage version ") {
+		t.Errorf("output = %q", out.String())
 	}
 }
