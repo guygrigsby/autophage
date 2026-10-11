@@ -34,11 +34,11 @@ route = "cost"
 # window. Check autophage_model_prompt_tokens: if auto calls near 100k, set
 # route = "" (or "quality" with scores) to go back to the configured model.
 [model.auto]
-model = "anthropic/claude-sonnet-5"
+model = "anthropic/claude-sonnet-5.5"
 route = "cost"
 
 [model.approved]
-model = "anthropic/claude-sonnet-5"
+model = "anthropic/claude-sonnet-5.5"
 
 # Upkeep repair rounds; the free route on the local Qwens.
 [model.repair]

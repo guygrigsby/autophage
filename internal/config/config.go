@@ -131,8 +131,8 @@ func Default() Config {
 			Triage: ModelTier{Model: "zai/glm-5.3", Route: "cost"},
 			// Auto routes on cost on the assumption that a small fix fits
 			// the local Qwen; autophage_model_prompt_tokens is the check.
-			Auto:     ModelTier{Model: "anthropic/claude-sonnet-5", Route: "cost"},
-			Approved: ModelTier{Model: "anthropic/claude-sonnet-5"},
+			Auto:     ModelTier{Model: "anthropic/claude-sonnet-5.5", Route: "cost"},
+			Approved: ModelTier{Model: "anthropic/claude-sonnet-5.5"},
 			// The free route on the local Qwen: repairs are high-volume
 			// background work, and a repair reads a failing check and an
 			// existing diff rather than writing a fix from a description.
