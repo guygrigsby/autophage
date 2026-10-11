@@ -34,7 +34,7 @@ make build
 - `autophage run owner/repo#N`: manually start an existing issue.
 - `autophage stop attempt-id`: stop a running attempt.
 - `autophage why attempt-id`: the jess ledger chain for an attempt's run.
-- `autophage auth login` / `auth logout`, `autophage whoami`: token management.
+- `autophage auth login` / `auth logout`, `autophage whoami`: token management. `AUTOPHAGE_ADDR` (a URL such as `https://aph.guy.ts.net`, or `host:port`) sets the daemon the CLI talks to, ahead of the config file's `listen`; `--addr` overrides it. `auth login` mints only from loopback, so log in on the daemon's host or over an ssh tunnel, then use the token against the remote address.
 
 ## Config
 
