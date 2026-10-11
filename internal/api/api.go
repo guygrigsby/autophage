@@ -123,6 +123,7 @@ func New(dir string, static fs.FS, d Deps) http.Handler {
 		// DELETE: every other action in this API is a POST, and perch's
 		// client speaks GET and POST only.
 		mux.Handle("POST /api/repositories/{owner}/{repo}/watch", auth.Middleware(dir, http.HandlerFunc(h.watch)))
+		mux.Handle("POST /api/repositories/watch-all", auth.Middleware(dir, http.HandlerFunc(h.watchAll)))
 		mux.Handle("POST /api/repositories/{owner}/{repo}/unwatch", auth.Middleware(dir, http.HandlerFunc(h.unwatch)))
 		mux.Handle("GET /metrics", metricsHandler(d.Store, d.Version, d.StartedAt))
 	}

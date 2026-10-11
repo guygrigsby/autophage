@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/spf13/cobra"
+)
 
 func TestParseRepo(t *testing.T) {
 	if got, err := parseRepo("guy/repo"); err != nil || got != "guy/repo" {
@@ -34,6 +38,26 @@ func TestBumpCommandsAreRegistered(t *testing.T) {
 	for _, want := range []string{"bumps", "bump", "retry", "watch", "unwatch", "stop-repair"} {
 		if !have[want] {
 			t.Errorf("%q is not registered on the root command", want)
+		}
+	}
+}
+
+func TestWatchArgsAreRepoOrAll(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		ok   bool
+	}{
+		{[]string{"owner/repo"}, true},
+		{[]string{"--all"}, true},
+		{nil, false},
+		{[]string{"--all", "owner/repo"}, false},
+	} {
+		cmd := newWatchCmd()
+		cmd.RunE = func(*cobra.Command, []string) error { return nil }
+		cmd.SetArgs(c.args)
+		cmd.SilenceErrors, cmd.SilenceUsage = true, true
+		if err := cmd.Execute(); (err == nil) != c.ok {
+			t.Errorf("watch %v: err = %v, want ok=%v", c.args, err, c.ok)
 		}
 	}
 }

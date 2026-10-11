@@ -7,7 +7,7 @@ require (
 	github.com/google/go-github/v88 v88.0.0
 	github.com/guygrigsby/jess v0.1.0
 	github.com/guygrigsby/llm v0.6.2
-	github.com/guygrigsby/perch v0.1.0
+	github.com/guygrigsby/perch v0.1.1
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/pressly/goose/v3 v3.28.0

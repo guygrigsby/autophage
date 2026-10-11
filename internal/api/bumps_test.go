@@ -83,6 +83,32 @@ func TestWatchIsIdempotentAndUnwatchLeavesTheBumps(t *testing.T) {
 	}
 }
 
+func TestWatchAllCoversEveryEnrolledRepository(t *testing.T) {
+	st := storetest.Open(t)
+	for _, name := range []string{"guy/a", "guy/b", "guy/gone"} {
+		r, _ := resolution.NewRepository(name, 42, "main", t0)
+		if err := st.EnrollRepository(t.Context(), r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.RemoveRepository(t.Context(), "guy/gone", t0); err != nil {
+		t.Fatal(err)
+	}
+	srv, tok := bumpServer(t, st)
+
+	code, body := do(t, srv, tok, "POST", "/api/repositories/watch-all")
+	if code != http.StatusOK {
+		t.Fatalf("watch-all = %d %v", code, body)
+	}
+	got, err := st.WatchedRepositories(t.Context())
+	if err != nil || len(got) != 2 || got[0] != "guy/a" || got[1] != "guy/b" {
+		t.Errorf("watched = %v, %v; want the two enrolled repositories and not the removed one", got, err)
+	}
+	if code, _ := do(t, srv, tok, "POST", "/api/repositories/watch-all"); code != http.StatusOK {
+		t.Errorf("a repeated watch-all = %d", code)
+	}
+}
+
 func TestWatchRefusesAnUnenrolledRepository(t *testing.T) {
 	st := storetest.Open(t)
 	srv, tok := bumpServer(t, st)

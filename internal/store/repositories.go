@@ -57,6 +57,26 @@ func (s *Store) GetRepository(ctx context.Context, fullName string) (resolution.
 	return r, nil
 }
 
+// EnrolledRepositories lists every enrolled, not removed repository by name.
+func (s *Store) EnrolledRepositories(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `select r.full_name from repositories r
+		left join repository_removals x on x.repository = r.full_name
+		where x.repository is null order by r.full_name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // RepositoriesNeedingLabel lists enrolled repositories with no label setup.
 func (s *Store) RepositoriesNeedingLabel(ctx context.Context) ([]resolution.Repository, error) {
 	rows, err := s.pool.Query(ctx, `select r.full_name, r.installation_id, r.default_branch, r.enrolled_at

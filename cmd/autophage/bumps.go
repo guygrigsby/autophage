@@ -181,16 +181,36 @@ func newRetryCmd() *cobra.Command {
 }
 
 func newWatchCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "watch owner/repo",
+	var all bool
+	c := &cobra.Command{
+		Use:   "watch owner/repo | --all",
 		Short: "Act on the repository's dependabot bumps (enrollment alone is not enough)",
-		Args:  cobra.ExactArgs(1),
+		Long:  "Watch authorizes bumps for one enrolled repository. --all watches every repository enrolled now; a repository enrolled later needs its own watch or another --all.",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if all {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			repo, err := parseRepo(args[0])
+			cl, err := apiClient()
 			if err != nil {
 				return err
 			}
-			cl, err := apiClient()
+			if all {
+				var out struct {
+					Watched []string `json:"watched"`
+				}
+				if err := cl.PostJSON(cmd.Context(), "/api/repositories/watch-all", nil, &out); err != nil {
+					return err
+				}
+				for _, r := range out.Watched {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "watching %s\n", r)
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%d repositories watched\n", len(out.Watched))
+				return nil
+			}
+			repo, err := parseRepo(args[0])
 			if err != nil {
 				return err
 			}
@@ -205,6 +225,8 @@ func newWatchCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&all, "all", false, "watch every enrolled repository")
+	return c
 }
 
 func newUnwatchCmd() *cobra.Command {

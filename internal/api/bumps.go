@@ -149,6 +149,32 @@ func (h *handlers) watch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"repository": repo, "watched_at": watch.WatchedAt})
 }
 
+// watchAll is watch for every enrolled repository, for the operator who
+// trusts the whole installation. A repository enrolled later is not covered:
+// the call is a snapshot, not a standing rule.
+func (h *handlers) watchAll(w http.ResponseWriter, r *http.Request) {
+	repos, err := h.d.Store.EnrolledRepositories(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	for _, repo := range repos {
+		watch, err := upkeep.NewWatch(repo, h.d.Clock.Now())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		if err := h.d.Store.WatchRepository(r.Context(), watch); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	if repos == nil {
+		repos = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"watched": repos})
+}
+
 func (h *handlers) unwatch(w http.ResponseWriter, r *http.Request) {
 	repo := r.PathValue("owner") + "/" + r.PathValue("repo")
 	if err := h.d.Store.UnwatchRepository(r.Context(), repo); err != nil {
