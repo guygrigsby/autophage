@@ -17,10 +17,7 @@ require (
 	github.com/voocel/agentcore v1.6.9
 )
 
-require (
-	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
-	github.com/philippgille/chromem-go v0.7.1-0.20260517180012-fbeda8ab2b7a // indirect
-)
+require github.com/philippgille/chromem-go v0.7.1-0.20260517180012-fbeda8ab2b7a // indirect
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
@@ -48,7 +45,7 @@ require (
 	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/guygrigsby/agent-select v0.1.1
+	github.com/guygrigsby/agent-select v0.2.0
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect

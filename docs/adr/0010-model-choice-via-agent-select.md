@@ -1,6 +1,6 @@
 # 10. Model choice via agent-select
 
-Status: Accepted
+Status: Accepted; the ranking half is superseded by ADR 0011
 Date: 2026-10-10
 
 ## Context

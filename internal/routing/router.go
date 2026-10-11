@@ -1,25 +1,21 @@
 // Package routing is the host adapter between Aperture's live model
-// registry and agent-select's offline router (ADR 0010). It translates the
-// registry into runtime offers, asks the router for an ordering and hands
-// back the Aperture model id to run. It owns no ranking or policy: those
-// are agent-select's.
+// registry and agent-select's ranker (ADR 0010). It turns the registry into
+// candidates, asks route.Rank for an ordering and hands back the Aperture
+// model id to run. Ranking policy is agent-select's.
 package routing
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"math/big"
 	"slices"
+	"strconv"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/guygrigsby/llm/aperture"
 
-	ar "github.com/guygrigsby/agent-select/routing"
+	"github.com/guygrigsby/agent-select/route"
 )
 
 // Tier is a place autophage picks a model.
@@ -32,17 +28,12 @@ const (
 	Repair   Tier = "repair"
 )
 
-// Mode is the router's ordering mode for a tier.
-type Mode string
+// Mode is the ordering for a tier: "cost" or "quality".
+type Mode = route.Mode
 
 const (
-	// Cost orders by exact upper cost first. Zero-priced local models lead.
-	Cost Mode = "cost"
-	// Performance orders by estimated quality first. With no quality
-	// signals in the snapshot every candidate is unscored and the order
-	// falls back to cost, so a tier should leave this off until signals
-	// exist (ADR 0010).
-	Performance Mode = "performance"
+	Cost    = route.Cost
+	Quality = route.Quality
 )
 
 // ErrNotRouted means the tier has no routing mode configured: the caller
@@ -59,16 +50,14 @@ type Config struct {
 	Modes map[Tier]Mode
 	// Local lists gateway provider ids whose models run on the operator's
 	// own hardware. They are asserted free: the gateway prints no price for
-	// them, and an unknown price would rank behind every priced model.
+	// them, and an unknown price ranks behind every priced model.
 	Local []string
-	// LocalContext maps a local model id to its context window, for
-	// models whose registry entry reports none. A local model absent here
-	// has an unknown window, and a request with a token quantity rejects it.
+	// LocalContext maps a local model id to its context window, for models
+	// whose registry entry reports none. A local model absent here has an
+	// unknown window, and a request with a token quantity rejects it.
 	LocalContext map[string]int64
-	// Snapshot is an adopted agent-select artifact. Empty means an empty
-	// snapshot: every offer is unscored.
-	Snapshot []byte
-	Clock    func() time.Time
+	// Scorer supplies quality opinions; nil leaves every candidate unscored.
+	Scorer route.Scorer
 }
 
 // Router picks a model per tier from the live registry.
@@ -77,18 +66,17 @@ type Router struct {
 	modes        map[Tier]Mode
 	local        map[string]bool
 	localContext map[string]int64
-	engine       *ar.Engine
-	clock        func() time.Time
+	scorer       route.Scorer
 }
 
 // Choice is one routed pick.
 type Choice struct {
 	// ModelID is the Aperture id to build the model with.
 	ModelID string
-	OfferID string
-	// Warnings are the router's, verbatim: unscored estimate, unknown cost.
-	Warnings     []string
-	SnapshotHash string
+	// Warnings are the ranker's for the pick: unscored, cost_unknown.
+	Warnings []string
+	// Score is the pick's quality basis, empty when unscored.
+	Score string
 }
 
 // tierRequest is what a tier asks of a model. Token quantities are
@@ -101,45 +89,30 @@ type tierRequest struct {
 }
 
 var tierRequests = map[Tier]tierRequest{
-	Triage:   {task: "general", input: 8_000, output: 400},
+	Triage:   {task: "triage", input: 8_000, output: 400},
 	Attempt:  {task: "code", input: 150_000, output: 16_000, needsTools: true},
 	Approved: {task: "code", input: 150_000, output: 16_000, needsTools: true},
 	Repair:   {task: "code", input: 60_000, output: 8_000, needsTools: true},
 }
 
-// New builds a Router, adopting cfg.Snapshot or starting from an empty one.
+// New builds a Router.
 func New(cfg Config) (*Router, error) {
 	if cfg.Registry == nil {
 		return nil, errors.New("routing: registry is required")
-	}
-	clock := cfg.Clock
-	if clock == nil {
-		clock = time.Now
-	}
-	var snap *ar.Snapshot
-	var err error
-	if len(cfg.Snapshot) > 0 {
-		snap, err = ar.DecodeSnapshot(cfg.Snapshot)
-	} else {
-		now := clock().UTC().Truncate(time.Millisecond)
-		snap, err = ar.NewSnapshot(ar.SnapshotData{Schema: 1, CreatedAt: now, KnowledgeCutoff: now, Policy: "educated-v1", Distribution: "local"})
-	}
-	if err != nil {
-		return nil, fmt.Errorf("routing: snapshot: %w", err)
 	}
 	local := map[string]bool{}
 	for _, p := range cfg.Local {
 		local[p] = true
 	}
-	return &Router{registry: cfg.Registry, modes: cfg.Modes, local: local, localContext: cfg.LocalContext, engine: ar.NewEngine(snap), clock: clock}, nil
+	return &Router{registry: cfg.Registry, modes: cfg.Modes, local: local, localContext: cfg.LocalContext, scorer: cfg.Scorer}, nil
 }
 
 // Routed reports whether the tier picks from the registry.
 func (r *Router) Routed(t Tier) bool { return r.modes[t] != "" }
 
-// Choose reads the live registry and routes one request for the tier. Any
-// error means the caller keeps its static model: the registry was
-// unreachable, the request was malformed or nothing was admissible.
+// Choose reads the live registry and ranks it for the tier. Any error means
+// the caller keeps its static model: the registry was unreachable or
+// nothing was admissible.
 func (r *Router) Choose(ctx context.Context, tier Tier) (Choice, error) {
 	mode := r.modes[tier]
 	tr, ok := tierRequests[tier]
@@ -150,38 +123,28 @@ func (r *Router) Choose(ctx context.Context, tier Tier) (Choice, error) {
 	if err != nil {
 		return Choice{}, fmt.Errorf("routing: registry: %w", err)
 	}
-	offers := toRuntime(r.local, r.localContext, infos)
-	caps := []string{"text_input", "text_output"}
+	cands := toCandidates(r.local, r.localContext, infos)
+	task := route.Task{Name: tr.task, Mode: mode, Need: []string{"text"}, InputTokens: tr.input, OutputTokens: tr.output, AllowUnscored: true}
 	if tr.needsTools {
-		caps = append(caps, "tool_use")
+		task.Need = append(task.Need, "tools")
 	}
-	now := r.clock().UTC().Truncate(time.Millisecond)
-	req, err := ar.NewRequest(ar.RequestData{
-		ID: fmt.Sprintf("%s-%d", tier, now.UnixMilli()), Task: tr.task, Mode: string(mode),
-		EffectiveAt: now, RuntimeGeneration: generation(offers), Runtime: offers,
-		RequiredCapabilities: caps, ImageOperation: "none",
-		InputTokens: tr.input, OutputTokens: tr.output, AllowUnscored: true,
-	})
-	if err != nil {
-		return Choice{}, fmt.Errorf("routing: request: %w", err)
+	res := route.Rank(cands, task, r.scorer)
+	best, ok := res.Best()
+	if !ok {
+		return Choice{}, fmt.Errorf("routing: nothing admissible among %d registry entries%s", len(cands), rejectionSummary(res))
 	}
-	dec, err := r.engine.Route(req)
-	if err != nil || dec.Selected == nil {
-		return Choice{}, fmt.Errorf("routing: nothing admissible among %d registry entries%s", len(offers), rejectionSummary(dec))
+	c := Choice{ModelID: best.ID, Warnings: best.Warnings}
+	if best.Score != nil {
+		c.Score = best.Score.Basis
 	}
-	warnings := slices.Concat(dec.Warnings, dec.Selected.Warnings, dec.Selected.Estimate.Warnings)
-	if !dec.Selected.Estimate.Known {
-		warnings = append(warnings, "estimate_unscored")
-	}
-	slices.Sort(warnings)
-	return Choice{ModelID: dec.Selected.UpstreamID, OfferID: dec.Selected.OfferID, Warnings: slices.Compact(warnings), SnapshotHash: dec.SnapshotHash}, nil
+	return c, nil
 }
 
-// rejectionSummary names the most common rejection reasons, so a log line
-// says why a registry full of models yielded none.
-func rejectionSummary(d ar.Decision) string {
+// rejectionSummary names the rejection reasons by count, so a log line says
+// why a registry full of models yielded none.
+func rejectionSummary(res route.Result) string {
 	counts := map[string]int{}
-	for _, rj := range d.Rejections {
+	for _, rj := range res.Rejected {
 		for _, reason := range rj.Reasons {
 			counts[reason]++
 		}
@@ -199,129 +162,56 @@ func rejectionSummary(d ar.Decision) string {
 
 const chatEndpoint = "/v1/chat/completions"
 
-// toRuntime maps the registry one to one onto runtime offers. An entry is
-// eligible when the gateway serves it on the endpoint this host's adapter
-// speaks and authenticates the host for it; a listed model is not an
-// executable one. Entries with an identity the router would reject are
-// dropped, so one odd entry cannot fail every request.
-func toRuntime(local map[string]bool, localContext map[string]int64, infos []aperture.ModelInfo) []ar.RuntimeOfferData {
+// toCandidates maps the registry onto candidates. Only entries the gateway
+// serves on the endpoint this host's adapter speaks and authenticates the
+// host for are candidates: a listed model is not an executable one. The
+// aperture adapter wires OpenAI chat with tool calling, so every candidate
+// carries "text" and "tools"; that is the host's capability, not a claim
+// about any model's quality. Duplicate ids keep the first.
+func toCandidates(local map[string]bool, localContext map[string]int64, infos []aperture.ModelInfo) []route.Candidate {
 	seen := map[string]bool{}
-	var out []ar.RuntimeOfferData
+	var out []route.Candidate
 	for _, m := range infos {
-		if !validIDPart(m.Provider) || !validIDPart(m.ID) {
+		if !validID(m.ID) || seen[m.ID] {
 			continue
 		}
-		id := m.Provider + "/" + m.ID
-		if seen[id] {
+		if !slices.Contains(m.Endpoints, chatEndpoint) || m.RequiresClientAuth {
 			continue
 		}
-		seen[id] = true
-		o := ar.RuntimeOfferData{ID: id, Provider: m.Provider, UpstreamID: m.ID,
-			Eligible: slices.Contains(m.Endpoints, chatEndpoint) && !m.RequiresClientAuth}
-		if o.Eligible {
-			// The aperture adapter speaks OpenAI chat with tool calling;
-			// that is the host's capability, not a claim about the model.
-			o.Capabilities = []string{"text_input", "text_output", "tool_use"}
+		seen[m.ID] = true
+		c := route.Candidate{ID: m.ID, Caps: []string{"text", "tools"}, ContextTokens: m.ContextTokens, MaxOutputTokens: m.MaxOutputTokens}
+		isLocal := local[m.Provider]
+		if c.ContextTokens == 0 && isLocal {
+			c.ContextTokens = localContext[m.ID]
 		}
-		ctxTokens := m.ContextTokens
-		if ctxTokens == 0 && local[m.Provider] {
-			ctxTokens = localContext[m.ID]
+		if isLocal {
+			zero := 0.0
+			c.InputUSDPerMTok, c.OutputUSDPerMTok = &zero, &zero
+		} else {
+			c.InputUSDPerMTok, c.OutputUSDPerMTok = perMillion(m.InputPrice), perMillion(m.OutputPrice)
 		}
-		if ctxTokens > 0 {
-			o.Limits = append(o.Limits, ar.LimitData{Resource: "context_tokens", Maximum: ctxTokens})
-		}
-		if m.MaxOutputTokens > 0 {
-			o.Limits = append(o.Limits, ar.LimitData{Resource: "output_tokens", Maximum: m.MaxOutputTokens})
-		}
-		in, out2 := m.InputPrice, m.OutputPrice
-		if local[m.Provider] {
-			in, out2 = "0", "0"
-		}
-		pin, okIn := perMillion(in)
-		pout, okOut := perMillion(out2)
-		if okIn && okOut {
-			o.Prices = []ar.PriceData{{Component: "input_tokens", USDPerMillion: pin}, {Component: "output_tokens", USDPerMillion: pout}}
-		}
-		out = append(out, o)
+		out = append(out, c)
 	}
 	return out
 }
 
-// validIDPart mirrors the router's bound on identity strings.
-func validIDPart(s string) bool {
-	if s == "" || len(s) > 512 || s != strings.TrimSpace(s) {
+func validID(s string) bool {
+	if s == "" || s != strings.TrimSpace(s) {
 		return false
 	}
-	for _, r := range s {
-		if unicode.IsControl(r) || r == unicode.ReplacementChar {
-			return false
-		}
-	}
-	return true
+	return !strings.ContainsFunc(s, unicode.IsControl)
 }
 
-// perMillion converts the gateway's USD-per-token decimal to the router's
-// USD-per-million decimal, exactly. It rejects anything that is not a plain
-// nonnegative decimal, so an exponent form cannot inflate the rate.
-func perMillion(perToken string) (string, bool) {
-	if perToken == "" || strings.Count(perToken, ".") > 1 {
-		return "", false
+// perMillion converts the gateway's USD-per-token decimal to USD per
+// million. Anything that is not a plain nonnegative decimal is unknown.
+func perMillion(perToken string) *float64 {
+	if perToken == "" || strings.Trim(perToken, "0123456789.") != "" {
+		return nil
 	}
-	for _, r := range perToken {
-		if (r < '0' || r > '9') && r != '.' {
-			return "", false
-		}
-	}
-	rat, ok := new(big.Rat).SetString(perToken)
-	if !ok {
-		return "", false
-	}
-	rat.Mul(rat, big.NewRat(1_000_000, 1))
-	s := rat.FloatString(18)
-	if strings.Contains(s, ".") {
-		s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
-	}
-	return s, true
-}
-
-// generation is the runtime generation: a hash over the whole sorted
-// runtime projection, so any registry metadata change changes it.
-func generation(offers []ar.RuntimeOfferData) string {
-	norm := make([]ar.RuntimeOfferData, len(offers))
-	for i, o := range offers {
-		o.Capabilities = sortedCopy(o.Capabilities)
-		o.UnsupportedCapabilities = sortedCopy(o.UnsupportedCapabilities)
-		o.Limits = slices.SortedFunc(slices.Values(o.Limits), func(a, b ar.LimitData) int { return strings.Compare(a.Resource, b.Resource) })
-		o.Prices = slices.SortedFunc(slices.Values(o.Prices), func(a, b ar.PriceData) int { return strings.Compare(a.Component, b.Component) })
-		if o.Limits == nil {
-			o.Limits = []ar.LimitData{}
-		}
-		if o.Prices == nil {
-			o.Prices = []ar.PriceData{}
-		}
-		norm[i] = o
-	}
-	slices.SortFunc(norm, func(a, b ar.RuntimeOfferData) int {
-		if c := strings.Compare(a.Provider, b.Provider); c != 0 {
-			return c
-		}
-		return strings.Compare(a.UpstreamID, b.UpstreamID)
-	})
-	b, err := ar.CanonicalEncode(norm)
+	v, err := strconv.ParseFloat(perToken, 64)
 	if err != nil {
-		// Unreachable for DTOs the router already accepts; a distinct
-		// constant keeps the request valid rather than panicking.
-		return strings.Repeat("0", 64)
+		return nil
 	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
-}
-
-func sortedCopy(s []string) []string {
-	out := slices.Clone(s)
-	if out == nil {
-		out = []string{}
-	}
-	slices.Sort(out)
-	return out
+	v *= 1e6
+	return &v
 }

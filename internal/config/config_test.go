@@ -79,7 +79,7 @@ func TestValidateDeployRepo(t *testing.T) {
 func TestValidateRouteModes(t *testing.T) {
 	c := complete()
 	c.Model.Triage.Route = "cost"
-	c.Model.Repair.Route = "performance"
+	c.Model.Repair.Route = "quality"
 	if _, err := c.Validate(); err != nil {
 		t.Fatalf("valid routes rejected: %v", err)
 	}

@@ -3,11 +3,13 @@ package routing
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/guygrigsby/llm/aperture"
+
+	"github.com/guygrigsby/agent-select/route"
 )
 
 func registry(models ...aperture.ModelInfo) Registry {
@@ -28,10 +30,9 @@ func newRouter(t *testing.T, reg Registry) *Router {
 	t.Helper()
 	r, err := New(Config{
 		Registry:     reg,
-		Modes:        map[Tier]Mode{Triage: Cost, Repair: Cost, Attempt: Performance},
+		Modes:        map[Tier]Mode{Triage: Cost, Repair: Cost, Attempt: Quality},
 		Local:        []string{"trig"},
 		LocalContext: map[string]int64{"qwen-27b": 131072, "qwen-coder": 131072},
-		Clock:        func() time.Time { return time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -73,8 +74,7 @@ func TestIneligibleModelsNeverChosen(t *testing.T) {
 }
 
 func TestLocalModelWithoutKnownContextIsRejected(t *testing.T) {
-	r, err := New(Config{Registry: registry(qwen, flash), Modes: map[Tier]Mode{Triage: Cost}, Local: []string{"trig"},
-		Clock: func() time.Time { return time.Unix(0, 0).UTC() }})
+	r, err := New(Config{Registry: registry(qwen, flash), Modes: map[Tier]Mode{Triage: Cost}, Local: []string{"trig"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,35 +103,30 @@ func TestUnroutedTierIsAnError(t *testing.T) {
 	}
 }
 
-func TestGenerationTracksRegistryMetadata(t *testing.T) {
-	a := toRuntime(map[string]bool{"trig": true}, nil, []aperture.ModelInfo{sonnet})
-	repriced := sonnet
-	repriced.OutputPrice = "0.00002000"
-	b := toRuntime(map[string]bool{"trig": true}, nil, []aperture.ModelInfo{repriced})
-	if generation(a) == generation(b) {
-		t.Error("a price change left the runtime generation unchanged")
-	}
-	if len(generation(a)) != 64 {
-		t.Errorf("generation = %q, want 64 hex characters", generation(a))
-	}
-}
-
-func TestPricePerMillion(t *testing.T) {
-	for in, want := range map[string]string{
-		"0.00000200": "2",
-		"0.00000015": "0.15",
-		"0.00001000": "10",
-		"0":          "0",
-	} {
-		got, ok := perMillion(in)
-		if !ok || got != want {
-			t.Errorf("perMillion(%q) = %q, %v; want %q", in, got, ok, want)
+func TestPerMillion(t *testing.T) {
+	for in, want := range map[string]float64{"0.00000200": 2, "0.00000015": 0.15, "0": 0} {
+		got := perMillion(in)
+		if got == nil || math.Abs(*got-want) > 1e-9 {
+			t.Errorf("perMillion(%q) = %v, want %v", in, got, want)
 		}
 	}
 	for _, bad := range []string{"", "x", "-1", "1e400"} {
-		if _, ok := perMillion(bad); ok {
+		if perMillion(bad) != nil {
 			t.Errorf("perMillion(%q) accepted", bad)
 		}
+	}
+}
+
+func TestQualityTierFollowsScores(t *testing.T) {
+	r, err := New(Config{Registry: registry(flash, sonnet, qwen), Modes: map[Tier]Mode{Attempt: Quality}, Local: []string{"trig"},
+		LocalContext: map[string]int64{"qwen-27b": 131072},
+		Scorer:       route.Table{"anthropic/claude-sonnet-5": {"code": 0.9}, "zai/glm-5.3-flash": {"code": 0.6}, "qwen-27b": {"code": 0.5}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := r.Choose(t.Context(), Attempt)
+	if err != nil || c.ModelID != "anthropic/claude-sonnet-5" || c.Score != "table" {
+		t.Errorf("choice = %+v, %v; want the best-scored model", c, err)
 	}
 }
 
@@ -141,7 +136,7 @@ func TestWarningsSurface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(c.Warnings, "estimate_unscored") {
+	if !slices.Contains(c.Warnings, "unscored") {
 		t.Errorf("an unscored choice must say so: %+v", c)
 	}
 }
@@ -149,7 +144,7 @@ func TestWarningsSurface(t *testing.T) {
 func TestSmallLocalWindowExcludedByRequestSize(t *testing.T) {
 	small := aperture.ModelInfo{ID: "qwen", Provider: "trig", Endpoints: chat}
 	r, err := New(Config{Registry: registry(small, qwen, flash), Modes: map[Tier]Mode{Triage: Cost, Repair: Cost}, Local: []string{"trig"},
-		LocalContext: map[string]int64{"qwen": 32768, "qwen-27b": 131072}, Clock: func() time.Time { return time.Unix(0, 0).UTC() }})
+		LocalContext: map[string]int64{"qwen": 32768, "qwen-27b": 131072}})
 	if err != nil {
 		t.Fatal(err)
 	}

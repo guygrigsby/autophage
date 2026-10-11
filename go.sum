@@ -29,8 +29,6 @@ github.com/cpuguy83/dockercfg v0.3.2/go.mod h1:sugsbF4//dDlL/i+S+rtpIWp+5h0BHJHf
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
 github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
-github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 h1:uX1JmpONuD549D73r6cgnxyUu18Zb7yHAy5AYU0Pm4Q=
-github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467/go.mod h1:uzvlm1mxhHkdfqitSA92i7Se+S9ksOn3a3qmv/kyOCw=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/distribution/reference v0.6.0 h1:0IXCQ5g4/QMHHkarYzh5l+u8T3t73zM5QvfrDyIgxBk=
 github.com/distribution/reference v0.6.0/go.mod h1:BbU0aIcezP1/5jX/8MP0YiH4SdvB5Y4f/wlDRiLyi3E=
@@ -69,8 +67,8 @@ github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3 h1:LMLX+LgTNWpfvCBdFe
 github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3/go.mod h1:jl5iWTm0/hd5PjEYEOuwAJ57L/CibdZfrqZ5XA5GrCk=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/guygrigsby/agent-select v0.1.1 h1:RoDAtT2npS7tHU1EAvqzI2w5Sm8XhQAI6DHndfQ24vU=
-github.com/guygrigsby/agent-select v0.1.1/go.mod h1:He/BBerQ5j4xEUVkO7CizNk7AgDmplgfA/k20Nfqfhs=
+github.com/guygrigsby/agent-select v0.2.0 h1:0tHSwEJDqz/Zfx9YuRsG1znD1pf1fSBI36CAnX0RGfo=
+github.com/guygrigsby/agent-select v0.2.0/go.mod h1:bYn1uEFcSzVpAkQ6FIslAo3vKB0EyqycjHeZK/8fnJQ=
 github.com/guygrigsby/jess v0.1.0 h1:+HpiR07R5mb/QM6gZ4ffC7pCggoRUdaLu8+aDJdsly4=
 github.com/guygrigsby/jess v0.1.0/go.mod h1:/Asyo7H+sGG0wsZoW0rvCAyroqUPl8JCy47x84gZhN0=
 github.com/guygrigsby/llm v0.6.2 h1:OWOQ5xPokatcQ1qJaDVEe7R9yIHjF8mPjIb8GBf4/Lg=

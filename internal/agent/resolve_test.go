@@ -21,12 +21,12 @@ func (f fakeChooser) Choose(context.Context, routing.Tier) (routing.Choice, erro
 
 func TestResolveRoutedPick(t *testing.T) {
 	var logs []string
-	m := Models{Chooser: fakeChooser{choice: routing.Choice{ModelID: "qwen-27b", Warnings: []string{"estimate_unscored"}}},
+	m := Models{Chooser: fakeChooser{choice: routing.Choice{ModelID: "qwen-27b", Warnings: []string{"unscored"}}},
 		Logf: func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }}
 	if got := m.Resolve(t.Context(), routing.Triage, "zai/glm-5.3"); got != "qwen-27b" {
 		t.Errorf("got %q, want the routed pick", got)
 	}
-	if len(logs) != 1 || !strings.Contains(logs[0], "qwen-27b") || !strings.Contains(logs[0], "estimate_unscored") {
+	if len(logs) != 1 || !strings.Contains(logs[0], "qwen-27b") || !strings.Contains(logs[0], "unscored") {
 		t.Errorf("logs = %q, want the pick and its warnings", logs)
 	}
 }

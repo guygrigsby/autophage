@@ -20,8 +20,7 @@ operator_login  = "guy"                             # GitHub login used for oper
 # models on local_providers are free and lead, then the cheapest priced
 # model the gateway serves. The configured id is the fallback when the
 # registry is unreachable or nothing is admissible. Leave route empty to run
-# the configured id as is; "performance" is for tiers once the snapshot
-# carries quality signals.
+# the configured id as is. "quality" ranks by [routing.scores] below.
 [model.triage]
 model = "zai/glm-5.3"
 route = "cost"
@@ -40,9 +39,6 @@ route = "cost"
 [routing]
 # Gateway provider ids that run on the operator's own hardware (trig).
 local_providers = ["trig"]
-# An agent-select snapshot artifact adopted at boot; empty routes unscored.
-# snapshot = "~/.local/share/autophage/routing-snapshot.json"
-
 # Context window per local model id: the registry reports none, so these
 # mirror llama-swap's context_size on trig. A local model not listed here is
 # never chosen.
@@ -77,3 +73,12 @@ concurrency    = 2
 
 [label]
 approved = "approved"
+
+# Operator-declared quality, 0..1, per model id and task ("triage", "code" or
+# "*"). A tier with route = "quality" ranks by these; an unlisted model ranks
+# after every listed one. Example, commented out because scores are yours to
+# declare:
+# [routing.scores."anthropic/claude-sonnet-5"]
+# code = 0.9
+# [routing.scores.qwen-27b]
+# code = 0.5

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"strings"
@@ -45,7 +46,7 @@ func (m Models) Resolve(ctx context.Context, tier routing.Tier, static string) s
 		m.logf("routing: %s falls back to %s: %v", tier, static, err)
 		return static
 	}
-	m.logf("routing: %s -> %s (offer %s, snapshot %.12s, warnings: %s)", tier, c.ModelID, c.OfferID, c.SnapshotHash, strings.Join(c.Warnings, ","))
+	m.logf("routing: %s -> %s (score: %s, warnings: %s)", tier, c.ModelID, cmp.Or(c.Score, "none"), strings.Join(c.Warnings, ","))
 	return c.ModelID
 }
 

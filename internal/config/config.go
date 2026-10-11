@@ -42,7 +42,7 @@ type GitHubConfig struct {
 type ModelTier struct {
 	Model string `toml:"model"` // Aperture model id, as /v1/models lists it
 	// Route, when set, picks the model per use from the live registry
-	// (ADR 0010) and Model becomes the fallback: "cost" or "performance".
+	// (ADR 0010) and Model becomes the fallback: "cost" or "quality".
 	// Empty runs Model as configured.
 	Route string `toml:"route"`
 }
@@ -57,9 +57,10 @@ type RoutingConfig struct {
 	// context_size on trig). A local model absent here is never chosen for
 	// a request with a token quantity.
 	LocalContextTokens map[string]int64 `toml:"local_context_tokens"`
-	// Snapshot is the path of an agent-select snapshot artifact adopted at
-	// boot. Empty routes with no quality signals.
-	Snapshot string `toml:"snapshot"`
+	// Scores are operator-declared quality opinions: model id, then task
+	// ("triage", "code", or "*"), to 0..1. A tier routed on quality ranks by
+	// them; a model with no score ranks after every scored one.
+	Scores map[string]map[string]float64 `toml:"scores"`
 }
 
 type ModelConfig struct {
@@ -211,8 +212,8 @@ func (c Config) Validate() (Budgets, error) {
 		if tier.Model == "" {
 			errs = append(errs, fmt.Errorf("model.%s.model is required", name))
 		}
-		if tier.Route != "" && tier.Route != "cost" && tier.Route != "performance" {
-			errs = append(errs, fmt.Errorf("model.%s.route must be \"cost\", \"performance\" or empty, got %q", name, tier.Route))
+		if tier.Route != "" && tier.Route != "cost" && tier.Route != "quality" {
+			errs = append(errs, fmt.Errorf("model.%s.route must be \"cost\", \"quality\" or empty, got %q", name, tier.Route))
 		}
 	}
 	if c.Sandbox.Concurrency <= 0 {

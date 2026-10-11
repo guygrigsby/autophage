@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"log"
-	"os"
 	"time"
 
 	"github.com/guygrigsby/llm/aperture"
+
+	"github.com/guygrigsby/agent-select/route"
 
 	appconfig "github.com/guygrigsby/autophage/internal/config"
 	"github.com/guygrigsby/autophage/internal/routing"
@@ -18,8 +19,7 @@ import (
 const registryTimeout = 5 * time.Second
 
 // newRouter builds the registry-backed router for the tiers that set
-// route, and nil when none do. A snapshot that is configured but unreadable
-// is fatal at boot, like any other config the operator got wrong.
+// route, and nil when none do.
 func newRouter(cfg appconfig.Config) *routing.Router {
 	modes := map[routing.Tier]routing.Mode{}
 	for tier, mt := range map[routing.Tier]appconfig.ModelTier{
@@ -34,20 +34,13 @@ func newRouter(cfg appconfig.Config) *routing.Router {
 		log.Print("routing: off (no tier sets route)")
 		return nil
 	}
-	var snapshot []byte
-	if p := cfg.Routing.Snapshot; p != "" {
-		var err error
-		if snapshot, err = os.ReadFile(expandHome(p)); err != nil {
-			log.Fatalf("routing: read snapshot: %v", err)
-		}
-	}
 	rt, err := routing.New(routing.Config{
 		Registry: func(ctx context.Context) ([]aperture.ModelInfo, error) {
 			ctx, cancel := context.WithTimeout(ctx, registryTimeout)
 			defer cancel()
 			return aperture.ListModelInfo(ctx, "", "")
 		},
-		Modes: modes, Local: cfg.Routing.LocalProviders, LocalContext: cfg.Routing.LocalContextTokens, Snapshot: snapshot,
+		Modes: modes, Local: cfg.Routing.LocalProviders, LocalContext: cfg.Routing.LocalContextTokens, Scorer: route.Table(cfg.Routing.Scores),
 	})
 	if err != nil {
 		log.Fatalf("routing: %v", err)
