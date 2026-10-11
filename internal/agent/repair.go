@@ -9,6 +9,7 @@ import (
 	ac "github.com/voocel/agentcore"
 
 	"github.com/guygrigsby/autophage/internal/resolution"
+	"github.com/guygrigsby/autophage/internal/routing"
 	"github.com/guygrigsby/autophage/internal/sandbox"
 	"github.com/guygrigsby/autophage/internal/store"
 	"github.com/guygrigsby/autophage/internal/upkeep"
@@ -56,11 +57,11 @@ func (p *Repairer) metrics() Metrics {
 	return p.Metrics
 }
 
-func (p *Repairer) tier() (ac.ChatModel, error) {
+func (p *Repairer) tier(modelID string) (ac.ChatModel, error) {
 	if p.ModelOverride != nil {
 		return p.ModelOverride, nil
 	}
-	return p.Models.Tier(p.Model)
+	return p.Models.Tier(modelID)
 }
 
 func (p *Repairer) logf(format string, args ...any) {
@@ -272,7 +273,8 @@ func (p *Repairer) execute(ctx, caller context.Context, b *upkeep.Bump, a upkeep
 	// child lives in. Deferred second, so it runs before the teardown above.
 	defer func() { _ = closer.Close() }()
 
-	model, err := p.tier()
+	modelID := p.Models.Resolve(ctx, routing.Repair, p.Model)
+	model, err := p.tier(modelID)
 	if err != nil {
 		return setup("model", err)
 	}
@@ -281,7 +283,7 @@ func (p *Repairer) execute(ctx, caller context.Context, b *upkeep.Bump, a upkeep
 	runStart := time.Now()
 	report := RunAttempt(ctx, RunInput{
 		Model:     model,
-		ModelID:   p.Model,
+		ModelID:   modelID,
 		Tools:     tools,
 		Ledger:    p.Ledger,
 		Budget:    a.Budget,
@@ -291,7 +293,7 @@ func (p *Repairer) execute(ctx, caller context.Context, b *upkeep.Bump, a upkeep
 		Clock:     p.Clock,
 		Logf:      p.Logf,
 		OnRunBegan: func(runID string) {
-			p.recordRun(ctx, a.ID, resolution.Run{RunID: runID, Model: p.Model, BaseSha: ws.BaseSha, BeganAt: p.now()})
+			p.recordRun(ctx, a.ID, resolution.Run{RunID: runID, Model: modelID, BaseSha: ws.BaseSha, BeganAt: p.now()})
 		},
 		Metrics:      m,
 		ModelMetrics: p.Models.metrics(),

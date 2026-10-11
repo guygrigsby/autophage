@@ -22,6 +22,7 @@ type Config struct {
 	Label   LabelConfig   `toml:"label"`
 	Upkeep  UpkeepConfig  `toml:"upkeep"`
 	Deploy  DeployConfig  `toml:"deploy"`
+	Routing RoutingConfig `toml:"routing"`
 }
 
 type DBConfig struct {
@@ -40,6 +41,24 @@ type GitHubConfig struct {
 
 type ModelTier struct {
 	Model string `toml:"model"` // Aperture model id, as /v1/models lists it
+	// Route, when set, picks the model per use from the live registry
+	// (ADR 0010) and Model becomes the fallback: "cost" or "performance".
+	// Empty runs Model as configured.
+	Route string `toml:"route"`
+}
+
+// RoutingConfig is the host side of agent-select routing.
+type RoutingConfig struct {
+	// LocalProviders are gateway provider ids that run on the operator's
+	// own hardware. Their models are asserted free.
+	LocalProviders []string `toml:"local_providers"`
+	// LocalContextTokens is the context window asserted for a local model
+	// whose registry entry reports none. Zero leaves it unknown, and a
+	// local model is then never chosen for a request with a token quantity.
+	LocalContextTokens int64 `toml:"local_context_tokens"`
+	// Snapshot is the path of an agent-select snapshot artifact adopted at
+	// boot. Empty routes with no quality signals.
+	Snapshot string `toml:"snapshot"`
 }
 
 type ModelConfig struct {
@@ -101,14 +120,17 @@ func Default() Config {
 		Label:   LabelConfig{Approved: "approved"},
 		GitHub:  GitHubConfig{BotLogin: "autophage[bot]"},
 		Model: ModelConfig{
-			Triage:   ModelTier{Model: "zai/glm-5.3"},
+			// Triage and repair route on cost: the local Qwens on trig lead
+			// as free, and the configured id is the fallback.
+			Triage:   ModelTier{Model: "zai/glm-5.3", Route: "cost"},
 			Auto:     ModelTier{Model: "anthropic/claude-sonnet-5"},
 			Approved: ModelTier{Model: "anthropic/claude-sonnet-5"},
 			// The free route on the local Qwen: repairs are high-volume
 			// background work, and a repair reads a failing check and an
 			// existing diff rather than writing a fix from a description.
-			Repair: ModelTier{Model: "qwen-27b"},
+			Repair: ModelTier{Model: "qwen-27b", Route: "cost"},
 		},
+		Routing: RoutingConfig{LocalProviders: []string{"trig"}},
 		Upkeep: UpkeepConfig{
 			DependabotLogin: "dependabot[bot]",
 			RoundCap:        3,
@@ -187,6 +209,9 @@ func (c Config) Validate() (Budgets, error) {
 	for name, tier := range map[string]ModelTier{"triage": c.Model.Triage, "auto": c.Model.Auto, "approved": c.Model.Approved, "repair": c.Model.Repair} {
 		if tier.Model == "" {
 			errs = append(errs, fmt.Errorf("model.%s.model is required", name))
+		}
+		if tier.Route != "" && tier.Route != "cost" && tier.Route != "performance" {
+			errs = append(errs, fmt.Errorf("model.%s.route must be \"cost\", \"performance\" or empty, got %q", name, tier.Route))
 		}
 	}
 	if c.Sandbox.Concurrency <= 0 {

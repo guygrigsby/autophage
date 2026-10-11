@@ -1,10 +1,14 @@
 package agent
 
 import (
+	"context"
 	"errors"
+	"strings"
 
 	"github.com/guygrigsby/llm"
 	"github.com/guygrigsby/llm/aperture"
+
+	"github.com/guygrigsby/autophage/internal/routing"
 )
 
 // Models builds one llm.LLM per Aperture model id. The gateway is on the
@@ -14,6 +18,41 @@ type Models struct {
 	// Metrics observes every metered call each adapter makes. Nil is
 	// NopModelMetrics.
 	Metrics ModelMetrics
+	// Chooser picks the model for a routed tier from the live registry
+	// (ADR 0010). Nil means every tier runs its configured id.
+	Chooser Chooser
+	Logf    func(string, ...any)
+}
+
+// Chooser is the routing seam: the registry-backed pick for one tier.
+type Chooser interface {
+	Choose(ctx context.Context, tier routing.Tier) (routing.Choice, error)
+}
+
+// Resolve returns the model id a tier runs on right now: the routed pick
+// when the tier is routed and routing answers, static otherwise. A routing
+// failure logs a warning and keeps the configured id, so an unreachable
+// gateway registry never stops work the static id could still do.
+func (m Models) Resolve(ctx context.Context, tier routing.Tier, static string) string {
+	if m.Chooser == nil {
+		return static
+	}
+	c, err := m.Chooser.Choose(ctx, tier)
+	switch {
+	case errors.Is(err, routing.ErrNotRouted):
+		return static
+	case err != nil:
+		m.logf("routing: %s falls back to %s: %v", tier, static, err)
+		return static
+	}
+	m.logf("routing: %s -> %s (offer %s, snapshot %.12s, warnings: %s)", tier, c.ModelID, c.OfferID, c.SnapshotHash, strings.Join(c.Warnings, ","))
+	return c.ModelID
+}
+
+func (m Models) logf(format string, args ...any) {
+	if m.Logf != nil {
+		m.Logf(format, args...)
+	}
 }
 
 // Tier returns the adapter for modelID.

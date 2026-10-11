@@ -13,6 +13,7 @@ import (
 	ac "github.com/voocel/agentcore"
 
 	"github.com/guygrigsby/autophage/internal/resolution"
+	"github.com/guygrigsby/autophage/internal/routing"
 	"github.com/guygrigsby/autophage/internal/sandbox"
 	"github.com/guygrigsby/autophage/internal/store"
 )
@@ -105,6 +106,13 @@ var _ resolution.Runner = (*Runner)(nil)
 // once at startup, and a missing key must leave every case Received for the
 // next sweep instead of taking the process down.
 func (r *Runner) Triager() resolution.Triager {
+	if r.ModelOverride == nil && r.Models.Chooser != nil {
+		return &Triager{Metrics: r.Models.metrics(), Resolve: func(ctx context.Context) (ModelPick, error) {
+			id := r.Models.Resolve(ctx, routing.Triage, r.TriageModel)
+			m, err := r.tier(id)
+			return ModelPick{Model: m, ID: id}, err
+		}}
+	}
 	m, err := r.tier(r.TriageModel)
 	if err != nil {
 		return brokenTriager{err}
@@ -379,9 +387,9 @@ func (r *Runner) execute(ctx, caller context.Context, c *resolution.Case, a reso
 	// before the teardown above.
 	defer func() { _ = closer.Close() }()
 
-	modelID := r.AttemptModel
+	modelID := r.Models.Resolve(ctx, routing.Attempt, r.AttemptModel)
 	if a.Kind == resolution.Approved && r.ApprovedModel != "" {
-		modelID = r.ApprovedModel
+		modelID = r.Models.Resolve(ctx, routing.Approved, r.ApprovedModel)
 	}
 	model, err := r.tier(modelID)
 	if err != nil {

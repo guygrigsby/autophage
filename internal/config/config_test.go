@@ -75,3 +75,30 @@ func TestValidateDeployRepo(t *testing.T) {
 		t.Errorf("valid repo: %v", err)
 	}
 }
+
+func TestValidateRouteModes(t *testing.T) {
+	c := complete()
+	c.Model.Triage.Route = "cost"
+	c.Model.Repair.Route = "performance"
+	if _, err := c.Validate(); err != nil {
+		t.Fatalf("valid routes rejected: %v", err)
+	}
+	c.Model.Auto.Route = "cheapest"
+	_, err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "model.auto.route") {
+		t.Fatalf("err = %v, want model.auto.route named", err)
+	}
+}
+
+func TestDefaultRoutesCheapTiersToLocalModels(t *testing.T) {
+	c := Default()
+	if c.Model.Triage.Route != "cost" || c.Model.Repair.Route != "cost" {
+		t.Errorf("triage/repair routes = %q/%q, want cost", c.Model.Triage.Route, c.Model.Repair.Route)
+	}
+	if c.Model.Auto.Route != "" || c.Model.Approved.Route != "" {
+		t.Errorf("attempt tiers route by default: %q/%q", c.Model.Auto.Route, c.Model.Approved.Route)
+	}
+	if len(c.Routing.LocalProviders) != 1 || c.Routing.LocalProviders[0] != "trig" {
+		t.Errorf("local providers = %v", c.Routing.LocalProviders)
+	}
+}

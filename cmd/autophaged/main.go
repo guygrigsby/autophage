@@ -87,7 +87,10 @@ func main() {
 	// attributes daemon commits to the App account (issue autophage-cou).
 	sb := &sandbox.Manager{Image: cfg.Sandbox.Image, WorkspacesDir: expandHome(cfg.Sandbox.WorkspacesDir),
 		BotName: cfg.GitHub.BotLogin, BotEmail: "325819538+autophage-agent[bot]@users.noreply.github.com", Logf: log.Printf}
-	models := agent.Models{Metrics: api.ModelMetrics{}}
+	models := agent.Models{Metrics: api.ModelMetrics{}, Logf: log.Printf}
+	if rt := newRouter(cfg); rt != nil {
+		models.Chooser = rt
+	}
 	runner := &agent.Runner{
 		Store:         st,
 		GitHub:        gh,
