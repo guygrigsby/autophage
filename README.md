@@ -24,7 +24,7 @@ make build
 
 ## Building
 
-`go.mod` pins `github.com/guygrigsby/jess` (v0.1.0, the MCP adapter and ledger) and `github.com/guygrigsby/llm` (v0.5.0, the aperture adapter) to published tags, so a plain `make build` works from a clone with no sibling checkouts. Bumping either is a `go get` plus `go mod tidy`; the release steps for a new tag are in the runbook's step 1.
+`go.mod` pins `github.com/guygrigsby/jess` (v0.1.0, the MCP adapter and ledger) and `github.com/guygrigsby/llm` (v0.6.2, the aperture adapter) to published tags, so a plain `make build` works from a clone with no sibling checkouts. Bumping either is a `go get` plus `go mod tidy`; the release steps for a new tag are in the runbook's step 1.
 
 ## CLI
 

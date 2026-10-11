@@ -6,7 +6,7 @@ require (
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0
 	github.com/google/go-github/v88 v88.0.0
 	github.com/guygrigsby/jess v0.1.0
-	github.com/guygrigsby/llm v0.6.1
+	github.com/guygrigsby/llm v0.6.2
 	github.com/guygrigsby/perch v0.1.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
@@ -109,7 +109,3 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 	modernc.org/sqlite v1.60.1 // indirect
 )
-
-replace github.com/guygrigsby/agent-select => ../agent-select
-
-replace github.com/guygrigsby/llm => ../llm
