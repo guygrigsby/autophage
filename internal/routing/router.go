@@ -61,10 +61,10 @@ type Config struct {
 	// own hardware. They are asserted free: the gateway prints no price for
 	// them, and an unknown price would rank behind every priced model.
 	Local []string
-	// LocalContext is the context window asserted for a local model whose
-	// registry entry reports none. Zero leaves it unknown, and a request
-	// with a token quantity then rejects the model.
-	LocalContext int64
+	// LocalContext maps a local model id to its context window, for
+	// models whose registry entry reports none. A local model absent here
+	// has an unknown window, and a request with a token quantity rejects it.
+	LocalContext map[string]int64
 	// Snapshot is an adopted agent-select artifact. Empty means an empty
 	// snapshot: every offer is unscored.
 	Snapshot []byte
@@ -76,7 +76,7 @@ type Router struct {
 	registry     Registry
 	modes        map[Tier]Mode
 	local        map[string]bool
-	localContext int64
+	localContext map[string]int64
 	engine       *ar.Engine
 	clock        func() time.Time
 }
@@ -204,7 +204,7 @@ const chatEndpoint = "/v1/chat/completions"
 // speaks and authenticates the host for it; a listed model is not an
 // executable one. Entries with an identity the router would reject are
 // dropped, so one odd entry cannot fail every request.
-func toRuntime(local map[string]bool, localContext int64, infos []aperture.ModelInfo) []ar.RuntimeOfferData {
+func toRuntime(local map[string]bool, localContext map[string]int64, infos []aperture.ModelInfo) []ar.RuntimeOfferData {
 	seen := map[string]bool{}
 	var out []ar.RuntimeOfferData
 	for _, m := range infos {
@@ -225,7 +225,7 @@ func toRuntime(local map[string]bool, localContext int64, infos []aperture.Model
 		}
 		ctxTokens := m.ContextTokens
 		if ctxTokens == 0 && local[m.Provider] {
-			ctxTokens = localContext
+			ctxTokens = localContext[m.ID]
 		}
 		if ctxTokens > 0 {
 			o.Limits = append(o.Limits, ar.LimitData{Resource: "context_tokens", Maximum: ctxTokens})

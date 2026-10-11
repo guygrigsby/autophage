@@ -121,7 +121,7 @@ AUTOPHAGE_GITHUB_WEBHOOK_SECRET=<webhook secret>
 EOF
 ```
 
-No model key: model calls go to Aperture, the gateway on the tailnet, which authenticates the host. The deploy host must be on the tailnet and resolve Aperture's name. Routed tiers (ADR 0010) read `/v1/models` before each use; set `routing.local_context_tokens` to the context size trig serves, or the local models are never chosen. The daemon logs `routing: <tier> -> <id>` per pick and `routing: <tier> falls back to <id>` when the registry fails.
+No model key: model calls go to Aperture, the gateway on the tailnet, which authenticates the host. The deploy host must be on the tailnet and resolve Aperture's name. Routed tiers (ADR 0010) read `/v1/models` before each use; `routing.local_context_tokens` maps each local model id to its context window (llama-swap `context_size` on trig); a local model not listed is never chosen. The daemon logs `routing: <tier> -> <id>` per pick and `routing: <tier> falls back to <id>` when the registry fails.
 
 ## 6. Config (ssh)
 

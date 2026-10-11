@@ -30,7 +30,7 @@ func newRouter(t *testing.T, reg Registry) *Router {
 		Registry:     reg,
 		Modes:        map[Tier]Mode{Triage: Cost, Repair: Cost, Attempt: Performance},
 		Local:        []string{"trig"},
-		LocalContext: 131072,
+		LocalContext: map[string]int64{"qwen-27b": 131072, "qwen-coder": 131072},
 		Clock:        func() time.Time { return time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC) },
 	})
 	if err != nil {
@@ -104,10 +104,10 @@ func TestUnroutedTierIsAnError(t *testing.T) {
 }
 
 func TestGenerationTracksRegistryMetadata(t *testing.T) {
-	a := toRuntime(map[string]bool{"trig": true}, 0, []aperture.ModelInfo{sonnet})
+	a := toRuntime(map[string]bool{"trig": true}, nil, []aperture.ModelInfo{sonnet})
 	repriced := sonnet
 	repriced.OutputPrice = "0.00002000"
-	b := toRuntime(map[string]bool{"trig": true}, 0, []aperture.ModelInfo{repriced})
+	b := toRuntime(map[string]bool{"trig": true}, nil, []aperture.ModelInfo{repriced})
 	if generation(a) == generation(b) {
 		t.Error("a price change left the runtime generation unchanged")
 	}
@@ -143,5 +143,21 @@ func TestWarningsSurface(t *testing.T) {
 	}
 	if !slices.Contains(c.Warnings, "estimate_unscored") {
 		t.Errorf("an unscored choice must say so: %+v", c)
+	}
+}
+
+func TestSmallLocalWindowExcludedByRequestSize(t *testing.T) {
+	small := aperture.ModelInfo{ID: "qwen", Provider: "trig", Endpoints: chat}
+	r, err := New(Config{Registry: registry(small, qwen, flash), Modes: map[Tier]Mode{Triage: Cost, Repair: Cost}, Local: []string{"trig"},
+		LocalContext: map[string]int64{"qwen": 32768, "qwen-27b": 131072}, Clock: func() time.Time { return time.Unix(0, 0).UTC() }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Triage (8.4k tokens) fits both free models; repair (68k) fits only the 27b.
+	if c, err := r.Choose(t.Context(), Repair); err != nil || c.ModelID != "qwen-27b" {
+		t.Errorf("repair = %+v, %v; want qwen-27b", c, err)
+	}
+	if c, err := r.Choose(t.Context(), Triage); err != nil || (c.ModelID != "qwen" && c.ModelID != "qwen-27b") {
+		t.Errorf("triage = %+v, %v; want a free local model", c, err)
 	}
 }

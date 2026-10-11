@@ -40,12 +40,16 @@ route = "cost"
 [routing]
 # Gateway provider ids that run on the operator's own hardware (trig).
 local_providers = ["trig"]
-# trig's context window, in tokens: the registry reports none for local
-# models, and one without a known window is never chosen. Set it to the
-# --ctx-size trig serves. Defaults to 0 (unknown) when commented out.
-# local_context_tokens = 131072
 # An agent-select snapshot artifact adopted at boot; empty routes unscored.
 # snapshot = "~/.local/share/autophage/routing-snapshot.json"
+
+# Context window per local model id: the registry reports none, so these
+# mirror llama-swap's context_size on trig. A local model not listed here is
+# never chosen.
+[routing.local_context_tokens]
+qwen-27b = 131072
+qwen = 32768
+
 
 # Push-to-deploy (ADR 0009). When repo is set and
 # AUTOPHAGE_DEPLOY_WEBHOOK_SECRET is in the environment, the daemon serves

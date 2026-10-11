@@ -52,10 +52,11 @@ type RoutingConfig struct {
 	// LocalProviders are gateway provider ids that run on the operator's
 	// own hardware. Their models are asserted free.
 	LocalProviders []string `toml:"local_providers"`
-	// LocalContextTokens is the context window asserted for a local model
-	// whose registry entry reports none. Zero leaves it unknown, and a
-	// local model is then never chosen for a request with a token quantity.
-	LocalContextTokens int64 `toml:"local_context_tokens"`
+	// LocalContextTokens maps a local model id to the context window it
+	// serves, for models whose registry entry reports none (llama-swap's
+	// context_size on trig). A local model absent here is never chosen for
+	// a request with a token quantity.
+	LocalContextTokens map[string]int64 `toml:"local_context_tokens"`
 	// Snapshot is the path of an agent-select snapshot artifact adopted at
 	// boot. Empty routes with no quality signals.
 	Snapshot string `toml:"snapshot"`
@@ -130,7 +131,7 @@ func Default() Config {
 			// existing diff rather than writing a fix from a description.
 			Repair: ModelTier{Model: "qwen-27b", Route: "cost"},
 		},
-		Routing: RoutingConfig{LocalProviders: []string{"trig"}},
+		Routing: RoutingConfig{LocalProviders: []string{"trig"}, LocalContextTokens: map[string]int64{"qwen-27b": 131072, "qwen": 32768}},
 		Upkeep: UpkeepConfig{
 			DependabotLogin: "dependabot[bot]",
 			RoundCap:        3,

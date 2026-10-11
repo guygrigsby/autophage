@@ -16,7 +16,7 @@ Host facts the adapter asserts, and nothing else:
 - Eligible means the gateway serves the entry on `/v1/chat/completions` and does not require client auth. A listed model is not an executable one.
 - Capabilities `text_input`, `text_output`, `tool_use` for eligible entries. That is what the aperture adapter wires, not a claim about any model's quality.
 - Limits and prices from the registry, USD per token converted exactly to per million. Tiered and fast-mode rates are not read.
-- Providers in `routing.local_providers` (trig) are free: price `0` asserted, because an unpriced offer ranks behind every priced one. Their context window comes from `routing.local_context_tokens`, since the registry reports none; unknown means never chosen.
+- Providers in `routing.local_providers` (trig) are free: price `0` asserted, because an unpriced offer ranks behind every priced one. Their context window comes from `routing.local_context_tokens`, a per-model map mirroring llama-swap's `context_size` on trig, since the Aperture registry reports none; unknown means never chosen. A 32k model (`qwen`) therefore serves triage but not repair.
 
 Defaults: triage and repair route on cost, so the local Qwens lead and the cheapest remote model follows. Auto and approved attempts do not route. With no quality signals in the snapshot every candidate is unscored and performance mode degrades to cost order, which would hand the highest-stakes tier to the cheapest model. Flip them to `"performance"` once a snapshot carries signals (`routing.snapshot`, adopted at boot). Until then routing is a live-registry filter plus cost order, and every pick logs `estimate_unscored`.
 

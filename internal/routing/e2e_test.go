@@ -16,7 +16,7 @@ func TestE2E_ChooseFromLiveRegistry(t *testing.T) {
 	r, err := New(Config{
 		Registry: func(ctx context.Context) ([]aperture.ModelInfo, error) { return aperture.ListModelInfo(ctx, "", "") },
 		Modes:    map[Tier]Mode{Triage: Cost, Repair: Cost},
-		Local:    []string{"trig"}, LocalContext: 131072,
+		Local:    []string{"trig"}, LocalContext: map[string]int64{"qwen-27b": 131072, "qwen": 32768},
 	})
 	if err != nil {
 		t.Fatal(err)
