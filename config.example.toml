@@ -30,8 +30,12 @@ model = "zai/glm-5.3"
 route = "cost"
 # local_only = true   # also set model = "qwen" (or another local model)
 
+# Auto routes on cost on the assumption that a small fix fits the local Qwen's
+# window. Check autophage_model_prompt_tokens: if auto calls near 100k, set
+# route = "" (or "quality" with scores) to go back to the configured model.
 [model.auto]
 model = "anthropic/claude-sonnet-5"
+route = "cost"
 
 [model.approved]
 model = "anthropic/claude-sonnet-5"

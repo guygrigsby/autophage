@@ -15,13 +15,13 @@ import (
 func TestE2E_ChooseFromLiveRegistry(t *testing.T) {
 	r, err := New(Config{
 		Registry: func(ctx context.Context) ([]aperture.ModelInfo, error) { return aperture.ListModelInfo(ctx, "", "") },
-		Modes:    map[Tier]Mode{Triage: Cost, Repair: Cost},
+		Modes:    map[Tier]Mode{Triage: Cost, Attempt: Cost, Repair: Cost},
 		Local:    []string{"trig"}, LocalContext: map[string]int64{"qwen-27b": 131072, "qwen": 32768},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tier := range []Tier{Triage, Repair} {
+	for _, tier := range []Tier{Triage, Attempt, Repair} {
 		c, err := r.Choose(t.Context(), tier)
 		if err != nil {
 			t.Fatalf("%s: %v", tier, err)

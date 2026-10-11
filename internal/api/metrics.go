@@ -32,7 +32,7 @@ func metricsHandler(st *store.Store, version string, startedAt time.Time) http.H
 	reg.MustRegister(AttemptsRunning, AttemptStepSeconds, AttemptStepErrors, AttemptToolCalls, AttemptToolSeconds, AttemptTurns, AttemptDiffLines, AttemptStops)
 	reg.MustRegister(Sweeps, SweepStepSeconds, SweepStepErrors, CommentPosts, Triages, TriageSeconds)
 	reg.MustRegister(GitHubRequests, GitHubRequestSeconds, GitHubRetries, GitHubRateLimitRemaining)
-	reg.MustRegister(ModelRequests, ModelLatency, ModelTokens, ModelCost)
+	reg.MustRegister(ModelRequests, ModelLatency, ModelPromptTokens, ModelTokens, ModelCost)
 
 	info := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "autophage_daemon_info", Help: "Always 1, labelled with the running version"}, []string{"version"})
 	info.WithLabelValues(version).Set(1)
@@ -122,9 +122,14 @@ var (
 	GitHubRateLimitRemaining = prometheus.NewGauge(prometheus.GaugeOpts{Name: "autophage_github_rate_limit_remaining", Help: "The last X-RateLimit-Remaining GitHub sent"})
 
 	ModelRequests = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "autophage_model_requests_total", Help: "Model calls, by model and result"}, []string{"model", "result"})
-	ModelLatency  = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "autophage_model_latency_seconds", Help: "One model call", Buckets: prometheus.ExponentialBucketsRange(0.5, 600, 12)}, []string{"model"})
-	ModelTokens   = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "autophage_model_tokens_total", Help: "Model tokens, by model and direction"}, []string{"model", "direction"})
-	ModelCost     = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "autophage_model_cost_usd_total", Help: "Provider-reported cost in USD, by model"}, []string{"model"})
+	// ModelPromptTokens is the input size of each call (uncached plus cache
+	// reads and writes). The run's peak is its last call, so the top bucket
+	// that fills is the context window a tier needs: it sizes the routing
+	// request estimates.
+	ModelPromptTokens = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "autophage_model_prompt_tokens", Help: "Input tokens of one model call", Buckets: prometheus.ExponentialBucketsRange(1000, 1_000_000, 14)}, []string{"model"})
+	ModelLatency      = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "autophage_model_latency_seconds", Help: "One model call", Buckets: prometheus.ExponentialBucketsRange(0.5, 600, 12)}, []string{"model"})
+	ModelTokens       = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "autophage_model_tokens_total", Help: "Model tokens, by model and direction"}, []string{"model", "direction"})
+	ModelCost         = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "autophage_model_cost_usd_total", Help: "Provider-reported cost in USD, by model"}, []string{"model"})
 )
 
 // stateCollector exposes autophage_cases{state} from CountByState.

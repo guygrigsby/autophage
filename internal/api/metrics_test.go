@@ -40,6 +40,7 @@ var catalogue = []string{
 	"autophage_triage_seconds",
 	"autophage_model_requests_total",
 	"autophage_model_latency_seconds",
+	"autophage_model_prompt_tokens",
 	"autophage_model_tokens_total",
 	"autophage_model_cost_usd_total",
 	"autophage_attempts_running",

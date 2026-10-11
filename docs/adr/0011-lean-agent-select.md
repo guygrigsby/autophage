@@ -17,3 +17,7 @@ Adopt agent-select v0.2.0, the lean `route` package (candidates and a task in, o
 - Declared scores are opinion. An outcome-driven `route.History` scorer is available in the library but not wired: recording attempt outcomes is follow-up work.
 - Results carry no snapshot hash; the log line names the pick, its score basis and warnings.
 - agent-select's imports leave `go.mod`: no canonicalization library, no SQLite or Postgres drivers from it.
+
+## Amendment: 2026-10-10, auto routes on cost
+
+The attempt request estimate was a guess (150k input), which made the 131k local window unable to serve attempts. It is now 100k, sized to fit `qwen-27b`, and `[model.auto]` routes on cost by default: the local Qwen leads on the assumption that a small fix fits it, until proven otherwise. The proof is the new `autophage_model_prompt_tokens` histogram (input size per call; a run's peak is its last call). If auto calls approach 100k, set `route = ""` on auto. Approved stays on its configured model.

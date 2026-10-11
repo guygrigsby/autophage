@@ -78,6 +78,7 @@ func (ModelMetrics) Observe(model string, u llm.Usage, err error) {
 		return
 	}
 	ModelLatency.WithLabelValues(model).Observe(u.Latency.Seconds())
+	ModelPromptTokens.WithLabelValues(model).Observe(float64(u.PromptTokens + u.CacheReadTokens + u.CacheWriteTokens))
 	// ReasoningTokens is a part of CompletionTokens, not an addition, so
 	// the directions are reported as the adapter splits them and summing
 	// them is the caller's business.

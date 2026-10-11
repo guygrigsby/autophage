@@ -128,8 +128,10 @@ func Default() Config {
 		Model: ModelConfig{
 			// Triage and repair route on cost: the local Qwens on trig lead
 			// as free, and the configured id is the fallback.
-			Triage:   ModelTier{Model: "zai/glm-5.3", Route: "cost"},
-			Auto:     ModelTier{Model: "anthropic/claude-sonnet-5"},
+			Triage: ModelTier{Model: "zai/glm-5.3", Route: "cost"},
+			// Auto routes on cost on the assumption that a small fix fits
+			// the local Qwen; autophage_model_prompt_tokens is the check.
+			Auto:     ModelTier{Model: "anthropic/claude-sonnet-5", Route: "cost"},
 			Approved: ModelTier{Model: "anthropic/claude-sonnet-5"},
 			// The free route on the local Qwen: repairs are high-volume
 			// background work, and a repair reads a failing check and an

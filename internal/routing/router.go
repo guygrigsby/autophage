@@ -83,7 +83,10 @@ type Choice struct {
 }
 
 // tierRequest is what a tier asks of a model. Token quantities are
-// conservative estimates, since they only gate context and cost.
+// estimates that gate context and cost, not measurements: the peak input of
+// a run is its last call, observed in autophage_model_prompt_tokens. Auto is
+// sized to fit the 131k local window on the assumption that a small fix
+// stays under it, until that histogram says otherwise.
 type tierRequest struct {
 	task       string
 	input      int64
@@ -93,7 +96,7 @@ type tierRequest struct {
 
 var tierRequests = map[Tier]tierRequest{
 	Triage:   {task: "triage", input: 8_000, output: 400},
-	Attempt:  {task: "code", input: 150_000, output: 16_000, needsTools: true},
+	Attempt:  {task: "code", input: 100_000, output: 16_000, needsTools: true},
 	Approved: {task: "code", input: 150_000, output: 16_000, needsTools: true},
 	Repair:   {task: "code", input: 60_000, output: 8_000, needsTools: true},
 }
