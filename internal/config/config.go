@@ -126,17 +126,13 @@ func Default() Config {
 		Label:   LabelConfig{Approved: "approved"},
 		GitHub:  GitHubConfig{BotLogin: "autophage[bot]"},
 		Model: ModelConfig{
-			// Triage and repair route on cost: the local Qwens on trig lead
-			// as free, and the configured id is the fallback.
-			Triage: ModelTier{Model: "zai/glm-5.3", Route: "cost"},
-			// Auto routes on cost on the assumption that a small fix fits
-			// the local Qwen; autophage_model_prompt_tokens is the check.
-			Auto:     ModelTier{Model: "anthropic/claude-sonnet-5.5", Route: "cost"},
+			// The local Qwen on trig serves triage, auto and repair; approved
+			// runs Sonnet. No tier routes by default: route = "cost" would
+			// pick the cheapest local model instead of the one named here.
+			Triage:   ModelTier{Model: "qwen-27b"},
+			Auto:     ModelTier{Model: "qwen-27b"},
 			Approved: ModelTier{Model: "anthropic/claude-sonnet-5.5"},
-			// The free route on the local Qwen: repairs are high-volume
-			// background work, and a repair reads a failing check and an
-			// existing diff rather than writing a fix from a description.
-			Repair: ModelTier{Model: "qwen-27b", Route: "cost"},
+			Repair:   ModelTier{Model: "qwen-27b"},
 		},
 		Routing: RoutingConfig{LocalProviders: []string{"trig"}, LocalContextTokens: map[string]int64{"qwen-27b": 131072, "qwen": 32768}},
 		Upkeep: UpkeepConfig{

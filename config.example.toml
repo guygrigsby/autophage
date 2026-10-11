@@ -16,34 +16,26 @@ operator_login  = "guy"                             # GitHub login used for oper
 # Aperture model ids, as its /v1/models lists them. The gateway is on the
 # tailnet and authenticates the host, so no key is configured anywhere.
 
-# route = "cost" picks the model per use from the live registry (ADR 0010):
-# models on local_providers are free and lead, then the cheapest priced
-# model the gateway serves. The configured id is the fallback when the
-# registry is unreachable or nothing is admissible. Leave route empty to run
-# the configured id as is. "quality" ranks by [routing.scores] below.
-# local_only = true restricts a tier to models on local_providers (trig); its
-# model must then be one of the local models listed under
-# [routing.local_context_tokens], so a registry failure cannot fall back to a
-# remote model.
+# The local Qwen on trig serves triage, auto and repair; approved runs Sonnet.
+# route = "cost" or "quality" picks the model per use from the live registry
+# instead (ADR 0010), and model becomes the fallback when the registry is
+# unreachable or nothing is admissible: "cost" leads with the cheapest local
+# model, "quality" ranks by [routing.scores] below. local_only = true limits a
+# routed tier to models on local_providers; its model must then be one of the
+# local models under [routing.local_context_tokens].
 [model.triage]
-model = "zai/glm-5.3"
-route = "cost"
-# local_only = true   # also set model = "qwen" (or another local model)
+model = "qwen-27b"
 
-# Auto routes on cost on the assumption that a small fix fits the local Qwen's
-# window. Check autophage_model_prompt_tokens: if auto calls near 100k, set
-# route = "" (or "quality" with scores) to go back to the configured model.
+# Watch autophage_model_prompt_tokens: if auto calls near the Qwen's 131072
+# window, move auto to a larger model.
 [model.auto]
-model = "anthropic/claude-sonnet-5.5"
-route = "cost"
+model = "qwen-27b"
 
 [model.approved]
 model = "anthropic/claude-sonnet-5.5"
 
-# Upkeep repair rounds; the free route on the local Qwens.
 [model.repair]
 model = "qwen-27b"
-route = "cost"
 
 [routing]
 # Gateway provider ids that run on the operator's own hardware (trig).

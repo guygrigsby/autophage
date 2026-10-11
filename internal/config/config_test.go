@@ -90,13 +90,15 @@ func TestValidateRouteModes(t *testing.T) {
 	}
 }
 
-func TestDefaultRoutesCheapTiersToLocalModels(t *testing.T) {
+func TestDefaultModels(t *testing.T) {
 	c := Default()
-	if c.Model.Triage.Route != "cost" || c.Model.Repair.Route != "cost" {
-		t.Errorf("triage/repair routes = %q/%q, want cost", c.Model.Triage.Route, c.Model.Repair.Route)
+	for name, tier := range map[string]ModelTier{"triage": c.Model.Triage, "auto": c.Model.Auto, "repair": c.Model.Repair} {
+		if tier.Model != "qwen-27b" || tier.Route != "" {
+			t.Errorf("%s = %+v, want qwen-27b pinned", name, tier)
+		}
 	}
-	if c.Model.Auto.Route != "cost" || c.Model.Approved.Route != "" {
-		t.Errorf("auto/approved routes = %q/%q, want cost and static", c.Model.Auto.Route, c.Model.Approved.Route)
+	if c.Model.Approved.Model != "anthropic/claude-sonnet-5.5" || c.Model.Approved.Route != "" {
+		t.Errorf("approved = %+v", c.Model.Approved)
 	}
 	if len(c.Routing.LocalProviders) != 1 || c.Routing.LocalProviders[0] != "trig" {
 		t.Errorf("local providers = %v", c.Routing.LocalProviders)
