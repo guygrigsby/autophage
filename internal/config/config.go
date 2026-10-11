@@ -45,6 +45,10 @@ type ModelTier struct {
 	// (ADR 0010) and Model becomes the fallback: "cost" or "quality".
 	// Empty runs Model as configured.
 	Route string `toml:"route"`
+	// LocalOnly restricts a routed tier to models on routing.local_providers.
+	// Model, the fallback, must then be one of routing.local_context_tokens'
+	// models, so a registry failure cannot send the tier to a remote model.
+	LocalOnly bool `toml:"local_only"`
 }
 
 // RoutingConfig is the host side of agent-select routing.
@@ -214,6 +218,17 @@ func (c Config) Validate() (Budgets, error) {
 		}
 		if tier.Route != "" && tier.Route != "cost" && tier.Route != "quality" {
 			errs = append(errs, fmt.Errorf("model.%s.route must be \"cost\", \"quality\" or empty, got %q", name, tier.Route))
+		}
+	}
+	for name, tier := range map[string]ModelTier{"triage": c.Model.Triage, "auto": c.Model.Auto, "approved": c.Model.Approved, "repair": c.Model.Repair} {
+		if !tier.LocalOnly {
+			continue
+		}
+		if tier.Route == "" {
+			errs = append(errs, fmt.Errorf("model.%s.local_only needs model.%s.route", name, name))
+		}
+		if _, ok := c.Routing.LocalContextTokens[tier.Model]; !ok {
+			errs = append(errs, fmt.Errorf("model.%s.local_only needs model.%s.model (%q) to be a local model listed in routing.local_context_tokens", name, name, tier.Model))
 		}
 	}
 	if c.Sandbox.Concurrency <= 0 {

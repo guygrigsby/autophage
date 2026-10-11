@@ -22,12 +22,14 @@ const registryTimeout = 5 * time.Second
 // route, and nil when none do.
 func newRouter(cfg appconfig.Config) *routing.Router {
 	modes := map[routing.Tier]routing.Mode{}
+	localOnly := map[routing.Tier]bool{}
 	for tier, mt := range map[routing.Tier]appconfig.ModelTier{
 		routing.Triage: cfg.Model.Triage, routing.Attempt: cfg.Model.Auto,
 		routing.Approved: cfg.Model.Approved, routing.Repair: cfg.Model.Repair,
 	} {
 		if mt.Route != "" {
 			modes[tier] = routing.Mode(mt.Route)
+			localOnly[tier] = mt.LocalOnly
 		}
 	}
 	if len(modes) == 0 {
@@ -40,7 +42,7 @@ func newRouter(cfg appconfig.Config) *routing.Router {
 			defer cancel()
 			return aperture.ListModelInfo(ctx, "", "")
 		},
-		Modes: modes, Local: cfg.Routing.LocalProviders, LocalContext: cfg.Routing.LocalContextTokens, Scorer: route.Table(cfg.Routing.Scores),
+		Modes: modes, LocalOnly: localOnly, Local: cfg.Routing.LocalProviders, LocalContext: cfg.Routing.LocalContextTokens, Scorer: route.Table(cfg.Routing.Scores),
 	})
 	if err != nil {
 		log.Fatalf("routing: %v", err)

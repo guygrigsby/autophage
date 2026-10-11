@@ -21,9 +21,14 @@ operator_login  = "guy"                             # GitHub login used for oper
 # model the gateway serves. The configured id is the fallback when the
 # registry is unreachable or nothing is admissible. Leave route empty to run
 # the configured id as is. "quality" ranks by [routing.scores] below.
+# local_only = true restricts a tier to models on local_providers (trig); its
+# model must then be one of the local models listed under
+# [routing.local_context_tokens], so a registry failure cannot fall back to a
+# remote model.
 [model.triage]
 model = "zai/glm-5.3"
 route = "cost"
+# local_only = true   # also set model = "qwen" (or another local model)
 
 [model.auto]
 model = "anthropic/claude-sonnet-5"

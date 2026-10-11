@@ -48,6 +48,8 @@ type Config struct {
 	Registry Registry
 	// Modes names the routed tiers. A tier absent here is not routed.
 	Modes map[Tier]Mode
+	// LocalOnly restricts a routed tier to models on Local providers.
+	LocalOnly map[Tier]bool
 	// Local lists gateway provider ids whose models run on the operator's
 	// own hardware. They are asserted free: the gateway prints no price for
 	// them, and an unknown price ranks behind every priced model.
@@ -64,6 +66,7 @@ type Config struct {
 type Router struct {
 	registry     Registry
 	modes        map[Tier]Mode
+	localOnly    map[Tier]bool
 	local        map[string]bool
 	localContext map[string]int64
 	scorer       route.Scorer
@@ -104,7 +107,7 @@ func New(cfg Config) (*Router, error) {
 	for _, p := range cfg.Local {
 		local[p] = true
 	}
-	return &Router{registry: cfg.Registry, modes: cfg.Modes, local: local, localContext: cfg.LocalContext, scorer: cfg.Scorer}, nil
+	return &Router{registry: cfg.Registry, modes: cfg.Modes, localOnly: cfg.LocalOnly, local: local, localContext: cfg.LocalContext, scorer: cfg.Scorer}, nil
 }
 
 // Routed reports whether the tier picks from the registry.
@@ -123,7 +126,7 @@ func (r *Router) Choose(ctx context.Context, tier Tier) (Choice, error) {
 	if err != nil {
 		return Choice{}, fmt.Errorf("routing: registry: %w", err)
 	}
-	cands := toCandidates(r.local, r.localContext, infos)
+	cands := toCandidates(r.local, r.localContext, r.localOnly[tier], infos)
 	task := route.Task{Name: tr.task, Mode: mode, Need: []string{"text"}, InputTokens: tr.input, OutputTokens: tr.output, AllowUnscored: true}
 	if tr.needsTools {
 		task.Need = append(task.Need, "tools")
@@ -167,15 +170,16 @@ const chatEndpoint = "/v1/chat/completions"
 // host for are candidates: a listed model is not an executable one. The
 // aperture adapter wires OpenAI chat with tool calling, so every candidate
 // carries "text" and "tools"; that is the host's capability, not a claim
-// about any model's quality. Duplicate ids keep the first.
-func toCandidates(local map[string]bool, localContext map[string]int64, infos []aperture.ModelInfo) []route.Candidate {
+// about any model's quality. onlyLocal drops every non-local provider.
+// Duplicate ids keep the first.
+func toCandidates(local map[string]bool, localContext map[string]int64, onlyLocal bool, infos []aperture.ModelInfo) []route.Candidate {
 	seen := map[string]bool{}
 	var out []route.Candidate
 	for _, m := range infos {
 		if !validID(m.ID) || seen[m.ID] {
 			continue
 		}
-		if !slices.Contains(m.Endpoints, chatEndpoint) || m.RequiresClientAuth {
+		if !slices.Contains(m.Endpoints, chatEndpoint) || m.RequiresClientAuth || (onlyLocal && !local[m.Provider]) {
 			continue
 		}
 		seen[m.ID] = true

@@ -102,3 +102,20 @@ func TestDefaultRoutesCheapTiersToLocalModels(t *testing.T) {
 		t.Errorf("local providers = %v", c.Routing.LocalProviders)
 	}
 }
+
+func TestValidateLocalOnly(t *testing.T) {
+	c := complete()
+	c.Model.Repair.Route, c.Model.Repair.LocalOnly = "cost", true
+	if _, err := c.Validate(); err != nil {
+		t.Fatalf("local-only repair on qwen-27b rejected: %v", err)
+	}
+	c.Model.Triage.Route, c.Model.Triage.LocalOnly = "cost", true // fallback zai/glm-5.3 is remote
+	if _, err := c.Validate(); err == nil || !strings.Contains(err.Error(), "model.triage.local_only") {
+		t.Fatalf("err = %v, want a remote fallback rejected", err)
+	}
+	c = complete()
+	c.Model.Repair.Route, c.Model.Repair.LocalOnly = "", true
+	if _, err := c.Validate(); err == nil || !strings.Contains(err.Error(), "model.repair.route") {
+		t.Fatalf("err = %v, want local_only without route rejected", err)
+	}
+}

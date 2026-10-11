@@ -156,3 +156,26 @@ func TestSmallLocalWindowExcludedByRequestSize(t *testing.T) {
 		t.Errorf("triage = %+v, %v; want a free local model", c, err)
 	}
 }
+
+func TestLocalOnlyNeverPicksRemote(t *testing.T) {
+	r, err := New(Config{Registry: registry(flash, sonnet, qwen), Modes: map[Tier]Mode{Repair: Quality}, LocalOnly: map[Tier]bool{Repair: true},
+		Local: []string{"trig"}, LocalContext: map[string]int64{"qwen-27b": 131072},
+		Scorer: route.Table{"anthropic/claude-sonnet-5": {"code": 0.9}, "qwen-27b": {"code": 0.1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := r.Choose(t.Context(), Repair)
+	if err != nil || c.ModelID != "qwen-27b" {
+		t.Fatalf("choice = %+v, %v; want the local model despite a better remote score", c, err)
+	}
+}
+
+func TestLocalOnlyWithNoLocalModelIsAnError(t *testing.T) {
+	r, err := New(Config{Registry: registry(flash, sonnet), Modes: map[Tier]Mode{Triage: Cost}, LocalOnly: map[Tier]bool{Triage: true}, Local: []string{"trig"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, err := r.Choose(t.Context(), Triage); err == nil {
+		t.Fatalf("chose %+v with no local model", c)
+	}
+}
