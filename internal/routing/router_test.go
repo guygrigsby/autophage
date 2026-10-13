@@ -179,3 +179,50 @@ func TestLocalOnlyWithNoLocalModelIsAnError(t *testing.T) {
 		t.Fatalf("chose %+v with no local model", c)
 	}
 }
+
+func outcomes(ts ...Tally) Outcomes {
+	return func(context.Context) ([]Tally, error) { return ts, nil }
+}
+
+// Recorded CI verdicts outrank the operator's table once a model has
+// MinRuns of them for the task; below that the table still decides.
+func TestHistoryOutranksTable(t *testing.T) {
+	table := route.Table{"anthropic/claude-sonnet-5": {"code": 0.9}, "qwen-27b": {"code": 0.5}}
+	for _, tc := range []struct {
+		name      string
+		runs      int
+		wantModel string
+		wantScore string
+	}{
+		{"enough runs", 5, "qwen-27b", "history n=5"},
+		{"too few runs", 4, "anthropic/claude-sonnet-5", "table"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := New(Config{Registry: registry(sonnet, qwen), Modes: map[Tier]Mode{Repair: Quality}, Local: []string{"trig"},
+				LocalContext: map[string]int64{"qwen-27b": 131072}, Scorer: table, MinRuns: 5,
+				Outcomes: outcomes(Tally{Tier: Repair, Model: "qwen-27b", Passes: tc.runs}, Tally{Tier: Repair, Model: "anthropic/claude-sonnet-5", Fails: tc.runs})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, err := r.Choose(t.Context(), Repair)
+			if err != nil || c.ModelID != tc.wantModel || c.Score != tc.wantScore {
+				t.Errorf("choice = %+v, %v; want %s on %q", c, err, tc.wantModel, tc.wantScore)
+			}
+		})
+	}
+}
+
+// A failing history read degrades to the table and says so; it never stops
+// routing.
+func TestHistoryReadFailureFallsBackToTable(t *testing.T) {
+	r, err := New(Config{Registry: registry(sonnet, qwen), Modes: map[Tier]Mode{Repair: Quality}, Local: []string{"trig"},
+		LocalContext: map[string]int64{"qwen-27b": 131072}, Scorer: route.Table{"anthropic/claude-sonnet-5": {"code": 0.9}},
+		Outcomes: func(context.Context) ([]Tally, error) { return nil, errors.New("db down") }, MinRuns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := r.Choose(t.Context(), Repair)
+	if err != nil || c.ModelID != "anthropic/claude-sonnet-5" || !slices.Contains(c.Warnings, "history_unavailable") {
+		t.Errorf("choice = %+v, %v; want the table pick with a history_unavailable warning", c, err)
+	}
+}

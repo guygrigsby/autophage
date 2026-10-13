@@ -60,6 +60,25 @@ type Config struct {
 	LocalContext map[string]int64
 	// Scorer supplies quality opinions; nil leaves every candidate unscored.
 	Scorer route.Scorer
+	// Outcomes reads the mechanically judged outcomes recorded so far, per
+	// use like the registry. Its history outranks Scorer for a model with
+	// MinRuns outcomes on the tier's task (ADR 0012). Nil means no history.
+	Outcomes Outcomes
+	// MinRuns is how many judged outcomes a model needs on a task before
+	// its history scores it.
+	MinRuns int
+}
+
+// Outcomes reads mechanical verdicts: CI on what a model pushed, never the
+// model's own claim.
+type Outcomes func(context.Context) ([]Tally, error)
+
+// Tally is the judged outcomes of one model on one tier.
+type Tally struct {
+	Tier   Tier
+	Model  string
+	Passes int
+	Fails  int
 }
 
 // Router picks a model per tier from the live registry.
@@ -70,6 +89,8 @@ type Router struct {
 	local        map[string]bool
 	localContext map[string]int64
 	scorer       route.Scorer
+	outcomes     Outcomes
+	minRuns      int
 }
 
 // Choice is one routed pick.
@@ -110,7 +131,8 @@ func New(cfg Config) (*Router, error) {
 	for _, p := range cfg.Local {
 		local[p] = true
 	}
-	return &Router{registry: cfg.Registry, modes: cfg.Modes, localOnly: cfg.LocalOnly, local: local, localContext: cfg.LocalContext, scorer: cfg.Scorer}, nil
+	return &Router{registry: cfg.Registry, modes: cfg.Modes, localOnly: cfg.LocalOnly, local: local, localContext: cfg.LocalContext, scorer: cfg.Scorer,
+		outcomes: cfg.Outcomes, minRuns: cfg.MinRuns}, nil
 }
 
 // Routed reports whether the tier picks from the registry.
@@ -134,16 +156,53 @@ func (r *Router) Choose(ctx context.Context, tier Tier) (Choice, error) {
 	if tr.needsTools {
 		task.Need = append(task.Need, "tools")
 	}
-	res := route.Rank(cands, task, r.scorer)
+	scorer, warning := r.scorerNow(ctx)
+	res := route.Rank(cands, task, scorer)
 	best, ok := res.Best()
 	if !ok {
 		return Choice{}, fmt.Errorf("routing: nothing admissible among %d registry entries%s", len(cands), rejectionSummary(res))
 	}
 	c := Choice{ModelID: best.ID, Warnings: best.Warnings}
+	if warning != "" {
+		c.Warnings = append(c.Warnings, warning)
+	}
 	if best.Score != nil {
 		c.Score = best.Score.Basis
 	}
 	return c, nil
+}
+
+// scorerNow is the history read now, ahead of the declared scorer: a
+// measured pass rate beats an opinion once there are enough runs behind it,
+// and the opinion covers every model without. Rebuilt per use from the
+// store, like the registry, so nothing here caches or drifts. A failed read
+// degrades to the declared scorer with a warning rather than failing the
+// pick.
+func (r *Router) scorerNow(ctx context.Context) (route.Scorer, string) {
+	if r.outcomes == nil {
+		return r.scorer, ""
+	}
+	tallies, err := r.outcomes(ctx)
+	if err != nil {
+		return r.scorer, "history_unavailable"
+	}
+	h := route.NewHistory(r.minRuns)
+	for _, t := range tallies {
+		tr, ok := tierRequests[t.Tier]
+		if !ok {
+			continue
+		}
+		for range t.Passes {
+			h.Record(tr.task, t.Model, true)
+		}
+		for range t.Fails {
+			h.Record(tr.task, t.Model, false)
+		}
+	}
+	if r.scorer == nil {
+		return h, ""
+	}
+	return route.Chain{h, r.scorer}, ""
 }
 
 // rejectionSummary names the rejection reasons by count, so a log line says
