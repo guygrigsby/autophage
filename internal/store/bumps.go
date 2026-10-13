@@ -507,3 +507,38 @@ func (s *Store) countInto(ctx context.Context, out map[string]int, sql string) (
 	}
 	return out, rows.Err()
 }
+
+// ModelVerdicts is CI's tally on the heads one model's repair rounds pushed.
+type ModelVerdicts struct {
+	Model  string
+	Passes int
+	Fails  int
+}
+
+// RepairVerdictsByModel is the mechanical record of each model's repair
+// work: CI's conclusive rollup on the exact head a round pushed, joined to
+// the model that ran the round. The verdict that opened a round judged
+// dependabot's head, not the model's, and a round that pushed nothing has
+// no verdict, so neither counts. Derived rather than stored: the facts
+// already live in bump_repair_runs, bump_repair_outcome_pushes and
+// bump_check_verdicts, whose unique (bump_id, head_sha) serves the join.
+// Ordered by model.
+func (s *Store) RepairVerdictsByModel(ctx context.Context) ([]ModelVerdicts, error) {
+	rows, err := s.pool.Query(ctx, `select run.model,
+			count(*) filter (where v.conclusion = 'success'),
+			count(*) filter (where v.conclusion = 'failure')
+		from bump_repair_outcome_pushes p
+		join bump_repairs r on r.id = p.repair_id
+		join bump_repair_runs run on run.repair_id = p.repair_id
+		join bump_check_verdicts v on v.bump_id = r.bump_id and v.head_sha = p.head_sha
+		group by run.model
+		order by run.model`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (ModelVerdicts, error) {
+		var m ModelVerdicts
+		err := row.Scan(&m.Model, &m.Passes, &m.Fails)
+		return m, err
+	})
+}
