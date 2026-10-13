@@ -25,3 +25,7 @@ The attempt request estimate was a guess (150k input), which made the 131k local
 ## Amendment: 2026-10-10, pinned models by default
 
 The operator chose the models: `qwen-27b` for triage, auto and repair, `anthropic/claude-sonnet-5.5` for approved. The defaults now pin those with no `route`, since cost routing would pick the cheapest local model (`qwen`, 9B) over the named one. Routing stays available per tier; the amendment above on auto's cost default no longer applies.
+
+## Amendment: 2026-10-13, history wired
+
+`route.History` is wired from CI verdicts on repair rounds and ranks ahead of `[routing.scores]`. See ADR 0012.
