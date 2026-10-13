@@ -121,3 +121,14 @@ func TestValidateLocalOnly(t *testing.T) {
 		t.Fatalf("err = %v, want local_only without route rejected", err)
 	}
 }
+
+func TestHistoryMinRuns(t *testing.T) {
+	if got := Default().Routing.HistoryMinRuns; got != 5 {
+		t.Errorf("default history_min_runs = %d, want 5", got)
+	}
+	c := complete()
+	c.Routing.HistoryMinRuns = 0
+	if _, err := c.Validate(); err == nil || !strings.Contains(err.Error(), "routing.history_min_runs") {
+		t.Fatalf("err = %v, want history_min_runs 0 rejected", err)
+	}
+}

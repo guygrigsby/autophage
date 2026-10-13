@@ -40,6 +40,9 @@ model = "qwen-27b"
 [routing]
 # Gateway provider ids that run on the operator's own hardware (trig).
 local_providers = ["trig"]
+# CI verdicts a model's pushed repair rounds need on a task before its pass
+# rate outranks [routing.scores] (ADR 0012).
+# history_min_runs = 5                  # default when commented out
 # Context window per local model id: the registry reports none, so these
 # mirror llama-swap's context_size on trig. A local model not listed here is
 # never chosen.

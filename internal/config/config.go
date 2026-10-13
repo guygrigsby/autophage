@@ -65,6 +65,9 @@ type RoutingConfig struct {
 	// ("triage", "code", or "*"), to 0..1. A tier routed on quality ranks by
 	// them; a model with no score ranks after every scored one.
 	Scores map[string]map[string]float64 `toml:"scores"`
+	// HistoryMinRuns is how many CI verdicts a model needs on a task before
+	// its recorded pass rate outranks Scores (ADR 0012).
+	HistoryMinRuns int `toml:"history_min_runs"`
 }
 
 type ModelConfig struct {
@@ -134,7 +137,7 @@ func Default() Config {
 			Approved: ModelTier{Model: "anthropic/claude-sonnet-5.5"},
 			Repair:   ModelTier{Model: "qwen-27b"},
 		},
-		Routing: RoutingConfig{LocalProviders: []string{"trig"}, LocalContextTokens: map[string]int64{"qwen-27b": 131072, "qwen": 32768}},
+		Routing: RoutingConfig{LocalProviders: []string{"trig"}, LocalContextTokens: map[string]int64{"qwen-27b": 131072, "qwen": 32768}, HistoryMinRuns: 5},
 		Upkeep: UpkeepConfig{
 			DependabotLogin: "dependabot[bot]",
 			RoundCap:        3,
@@ -228,6 +231,9 @@ func (c Config) Validate() (Budgets, error) {
 		if _, ok := c.Routing.LocalContextTokens[tier.Model]; !ok {
 			errs = append(errs, fmt.Errorf("model.%s.local_only needs model.%s.model (%q) to be a local model listed in routing.local_context_tokens", name, name, tier.Model))
 		}
+	}
+	if c.Routing.HistoryMinRuns < 1 {
+		errs = append(errs, errors.New("routing.history_min_runs must be at least 1"))
 	}
 	if c.Sandbox.Concurrency <= 0 {
 		errs = append(errs, errors.New("sandbox.concurrency must be positive"))

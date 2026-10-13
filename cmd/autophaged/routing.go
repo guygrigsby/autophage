@@ -11,16 +11,19 @@ import (
 
 	appconfig "github.com/guygrigsby/autophage/internal/config"
 	"github.com/guygrigsby/autophage/internal/routing"
+	"github.com/guygrigsby/autophage/internal/store"
 )
 
-// registryTimeout bounds the live registry read a routed tier makes before
-// each use. A slow gateway falls back to the configured id rather than
+// readTimeout bounds each read a routed tier makes before each use: the
+// live registry and the outcome history. A slow gateway falls back to the
+// configured id and a slow store to the declared scores, rather than
 // holding an attempt up.
-const registryTimeout = 5 * time.Second
+const readTimeout = 5 * time.Second
 
 // newRouter builds the registry-backed router for the tiers that set
-// route, and nil when none do.
-func newRouter(cfg appconfig.Config) *routing.Router {
+// route, and nil when none do. Repair rounds are the only work CI judges, so
+// they are the only history (ADR 0012).
+func newRouter(cfg appconfig.Config, st *store.Store) *routing.Router {
 	modes := map[routing.Tier]routing.Mode{}
 	localOnly := map[routing.Tier]bool{}
 	for tier, mt := range map[routing.Tier]appconfig.ModelTier{
@@ -38,11 +41,25 @@ func newRouter(cfg appconfig.Config) *routing.Router {
 	}
 	rt, err := routing.New(routing.Config{
 		Registry: func(ctx context.Context) ([]aperture.ModelInfo, error) {
-			ctx, cancel := context.WithTimeout(ctx, registryTimeout)
+			ctx, cancel := context.WithTimeout(ctx, readTimeout)
 			defer cancel()
 			return aperture.ListModelInfo(ctx, "", "")
 		},
 		Modes: modes, LocalOnly: localOnly, Local: cfg.Routing.LocalProviders, LocalContext: cfg.Routing.LocalContextTokens, Scorer: route.Table(cfg.Routing.Scores),
+		Outcomes: func(ctx context.Context) ([]routing.Tally, error) {
+			ctx, cancel := context.WithTimeout(ctx, readTimeout)
+			defer cancel()
+			verdicts, err := st.RepairVerdictsByModel(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]routing.Tally, len(verdicts))
+			for i, v := range verdicts {
+				out[i] = routing.Tally{Tier: routing.Repair, Model: v.Model, Passes: v.Passes, Fails: v.Fails}
+			}
+			return out, nil
+		},
+		MinRuns: cfg.Routing.HistoryMinRuns,
 	})
 	if err != nil {
 		log.Fatalf("routing: %v", err)

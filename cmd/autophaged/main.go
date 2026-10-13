@@ -88,7 +88,7 @@ func main() {
 	sb := &sandbox.Manager{Image: cfg.Sandbox.Image, WorkspacesDir: expandHome(cfg.Sandbox.WorkspacesDir),
 		BotName: cfg.GitHub.BotLogin, BotEmail: "325819538+autophage-agent[bot]@users.noreply.github.com", Logf: log.Printf}
 	models := agent.Models{Metrics: api.ModelMetrics{}, Logf: log.Printf}
-	if rt := newRouter(cfg); rt != nil {
+	if rt := newRouter(cfg, st); rt != nil {
 		models.Chooser = rt
 	}
 	runner := &agent.Runner{
