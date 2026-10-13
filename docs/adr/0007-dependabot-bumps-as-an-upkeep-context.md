@@ -149,3 +149,7 @@ number (five terms mean different things, so it is a seam, not a flag);
 recomputing CI in the sandbox (duplicates Actions); merging on green
 (duplicates native auto-merge); reviving abandoned bumps on force-push
 (unbounded retry).
+
+## Amendment: 2026-10-13, permissions the subscriptions need
+
+The Consequences above were wrong: no new grant was needed only for the work, not for the events or the rollup. `check_suite` delivers only with the Checks permission and `workflow_run` only with Actions. The rollup reads check runs (`Checks.ListCheckRunsForRef`, Checks read) and the combined status (`Repositories.GetCombinedStatus`, Commit statuses read). The App needs Checks, Actions and Commit statuses read, and the installation must accept them. Until it did, the App delivered `issues` only, so no bump reached the daemon and no repair verdict was recorded.
