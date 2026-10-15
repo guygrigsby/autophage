@@ -16,7 +16,7 @@ operator_login  = "guy"                             # GitHub login used for oper
 # Aperture model ids, as its /v1/models lists them. The gateway is on the
 # tailnet and authenticates the host, so no key is configured anywhere.
 
-# The local Qwen on trig serves triage, auto and repair; approved runs Sonnet.
+# The local Qwen MoE on trig (vLLM) serves triage, auto and repair; approved runs Sonnet.
 # route = "cost" or "quality" picks the model per use from the live registry
 # instead (ADR 0010), and model becomes the fallback when the registry is
 # unreachable or nothing is admissible: "cost" leads with the cheapest local
@@ -24,30 +24,31 @@ operator_login  = "guy"                             # GitHub login used for oper
 # routed tier to models on local_providers; its model must then be one of the
 # local models under [routing.local_context_tokens].
 [model.triage]
-model = "qwen-27b"
+model = "qwen-35b-a3b"
 
 # Watch autophage_model_prompt_tokens: if auto calls near the Qwen's 131072
 # window, move auto to a larger model.
 [model.auto]
-model = "qwen-27b"
+model = "qwen-35b-a3b"
 
 [model.approved]
 model = "anthropic/claude-sonnet-5.5"
 
 [model.repair]
-model = "qwen-27b"
+model = "qwen-35b-a3b"
 
 [routing]
-# Gateway provider ids that run on the operator's own hardware (trig).
-local_providers = ["trig"]
+# Gateway provider ids that run on the operator's own hardware (trig): llama-swap
+# and vLLM.
+local_providers = ["trig", "vllm"]
 # CI verdicts a model's pushed repair rounds need on a task before its pass
 # rate outranks [routing.scores] (ADR 0012).
 # history_min_runs = 5                  # default when commented out
 # Context window per local model id: the registry reports none, so these
-# mirror llama-swap's context_size on trig. A local model not listed here is
-# never chosen.
+# mirror the backends' max context on trig (vLLM max-model-len, llama-swap
+# context_size). A local model not listed here is never chosen.
 [routing.local_context_tokens]
-qwen-27b = 131072
+qwen-35b-a3b = 131072
 qwen = 32768
 
 
@@ -84,5 +85,5 @@ approved = "approved"
 # declare:
 # [routing.scores."anthropic/claude-sonnet-5"]
 # code = 0.9
-# [routing.scores.qwen-27b]
+# [routing.scores.qwen-35b-a3b]
 # code = 0.5

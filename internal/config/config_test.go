@@ -13,7 +13,7 @@ func complete() Config {
 	c.Model.Triage.Model = "zai/glm-5.3"
 	c.Model.Auto.Model = "anthropic/claude-sonnet-5"
 	c.Model.Approved.Model = "anthropic/claude-sonnet-5"
-	c.Model.Repair.Model = "qwen-27b"
+	c.Model.Repair.Model = "qwen-35b-a3b"
 	return c
 }
 
@@ -93,14 +93,14 @@ func TestValidateRouteModes(t *testing.T) {
 func TestDefaultModels(t *testing.T) {
 	c := Default()
 	for name, tier := range map[string]ModelTier{"triage": c.Model.Triage, "auto": c.Model.Auto, "repair": c.Model.Repair} {
-		if tier.Model != "qwen-27b" || tier.Route != "" {
-			t.Errorf("%s = %+v, want qwen-27b pinned", name, tier)
+		if tier.Model != "qwen-35b-a3b" || tier.Route != "" {
+			t.Errorf("%s = %+v, want qwen-35b-a3b pinned", name, tier)
 		}
 	}
 	if c.Model.Approved.Model != "anthropic/claude-sonnet-5.5" || c.Model.Approved.Route != "" {
 		t.Errorf("approved = %+v", c.Model.Approved)
 	}
-	if len(c.Routing.LocalProviders) != 1 || c.Routing.LocalProviders[0] != "trig" {
+	if len(c.Routing.LocalProviders) != 2 || c.Routing.LocalProviders[0] != "trig" || c.Routing.LocalProviders[1] != "vllm" {
 		t.Errorf("local providers = %v", c.Routing.LocalProviders)
 	}
 }
@@ -109,7 +109,7 @@ func TestValidateLocalOnly(t *testing.T) {
 	c := complete()
 	c.Model.Repair.Route, c.Model.Repair.LocalOnly = "cost", true
 	if _, err := c.Validate(); err != nil {
-		t.Fatalf("local-only repair on qwen-27b rejected: %v", err)
+		t.Fatalf("local-only repair on qwen-35b-a3b rejected: %v", err)
 	}
 	c.Model.Triage.Route, c.Model.Triage.LocalOnly = "cost", true // fallback zai/glm-5.3 is remote
 	if _, err := c.Validate(); err == nil || !strings.Contains(err.Error(), "model.triage.local_only") {

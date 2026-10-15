@@ -129,15 +129,15 @@ func Default() Config {
 		Label:   LabelConfig{Approved: "approved"},
 		GitHub:  GitHubConfig{BotLogin: "autophage[bot]"},
 		Model: ModelConfig{
-			// The local Qwen on trig serves triage, auto and repair; approved
+			// The local Qwen MoE on trig's vLLM serves triage, auto and repair; approved
 			// runs Sonnet. No tier routes by default: route = "cost" would
 			// pick the cheapest local model instead of the one named here.
-			Triage:   ModelTier{Model: "qwen-27b"},
-			Auto:     ModelTier{Model: "qwen-27b"},
+			Triage:   ModelTier{Model: "qwen-35b-a3b"},
+			Auto:     ModelTier{Model: "qwen-35b-a3b"},
 			Approved: ModelTier{Model: "anthropic/claude-sonnet-5.5"},
-			Repair:   ModelTier{Model: "qwen-27b"},
+			Repair:   ModelTier{Model: "qwen-35b-a3b"},
 		},
-		Routing: RoutingConfig{LocalProviders: []string{"trig"}, LocalContextTokens: map[string]int64{"qwen-27b": 131072, "qwen": 32768}, HistoryMinRuns: 5},
+		Routing: RoutingConfig{LocalProviders: []string{"trig", "vllm"}, LocalContextTokens: map[string]int64{"qwen-35b-a3b": 131072, "qwen": 32768}, HistoryMinRuns: 5},
 		Upkeep: UpkeepConfig{
 			DependabotLogin: "dependabot[bot]",
 			RoundCap:        3,
