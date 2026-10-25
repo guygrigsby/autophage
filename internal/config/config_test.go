@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 )
 
 func complete() Config {
@@ -13,7 +15,7 @@ func complete() Config {
 	c.Model.Triage.Model = "zai/glm-5.3"
 	c.Model.Auto.Model = "anthropic/claude-sonnet-5"
 	c.Model.Approved.Model = "anthropic/claude-sonnet-5"
-	c.Model.Repair.Model = "qwen-35b-a3b"
+	c.Model.Repair.Model = "qwen3-coder-next"
 	return c
 }
 
@@ -93,8 +95,8 @@ func TestValidateRouteModes(t *testing.T) {
 func TestDefaultModels(t *testing.T) {
 	c := Default()
 	for name, tier := range map[string]ModelTier{"triage": c.Model.Triage, "auto": c.Model.Auto, "repair": c.Model.Repair} {
-		if tier.Model != "qwen-35b-a3b" || tier.Route != "" {
-			t.Errorf("%s = %+v, want qwen-35b-a3b pinned", name, tier)
+		if tier.Model != "qwen3-coder-next" || tier.Route != "" {
+			t.Errorf("%s = %+v, want qwen3-coder-next pinned", name, tier)
 		}
 	}
 	if c.Model.Approved.Model != "anthropic/claude-sonnet-5.5" || c.Model.Approved.Route != "" {
@@ -103,13 +105,18 @@ func TestDefaultModels(t *testing.T) {
 	if len(c.Routing.LocalProviders) != 2 || c.Routing.LocalProviders[0] != "trig" || c.Routing.LocalProviders[1] != "vllm" {
 		t.Errorf("local providers = %v", c.Routing.LocalProviders)
 	}
+	if ctx, ok := c.Routing.LocalContextTokens["qwen3-coder-next"]; !ok {
+		t.Errorf("qwen3-coder-next context entry missing, want 262144")
+	} else if ctx != 262144 {
+		t.Errorf("qwen3-coder-next context = %d, want 262144", ctx)
+	}
 }
 
 func TestValidateLocalOnly(t *testing.T) {
 	c := complete()
 	c.Model.Repair.Route, c.Model.Repair.LocalOnly = "cost", true
 	if _, err := c.Validate(); err != nil {
-		t.Fatalf("local-only repair on qwen-35b-a3b rejected: %v", err)
+		t.Fatalf("local-only repair on qwen3-coder-next rejected: %v", err)
 	}
 	c.Model.Triage.Route, c.Model.Triage.LocalOnly = "cost", true // fallback zai/glm-5.3 is remote
 	if _, err := c.Validate(); err == nil || !strings.Contains(err.Error(), "model.triage.local_only") {
@@ -130,5 +137,65 @@ func TestHistoryMinRuns(t *testing.T) {
 	c.Routing.HistoryMinRuns = 0
 	if _, err := c.Validate(); err == nil || !strings.Contains(err.Error(), "routing.history_min_runs") {
 		t.Fatalf("err = %v, want history_min_runs 0 rejected", err)
+	}
+}
+
+func TestConfigExampleDrift(t *testing.T) {
+	type RawModel struct {
+		Model string ` + "`toml:\"model\"`" + `
+	}
+	type RawConfig struct {
+		Model struct {
+			Triage   RawModel ` + "`toml:\"triage\"`" + `
+			Auto     RawModel ` + "`toml:\"auto\"`" + `
+			Approved RawModel ` + "`toml:\"approved\"`" + `
+			Repair   RawModel ` + "`toml:\"repair\"`" + `
+		} ` + "`toml:\"model\"`" + `
+		Routing struct {
+			LocalProviders       []string          ` + "`toml:\"local_providers\"`" + `
+			LocalContextTokens   map[string]int64  ` + "`toml:\"local_context_tokens\"`" + `
+			Scores               map[string]map[string]float64 ` + "`toml:\"scores\"`" + `
+			HistoryMinRuns       int               ` + "`toml:\"history_min_runs\"`" + `
+		} ` + "`toml:\"routing\"`" + `
+	}
+
+	ext, err := os.ReadFile("../../config.example.toml")
+	if err != nil {
+		t.Fatalf("read config.example.toml: %v", err)
+	}
+
+	var raw RawConfig
+	if err := toml.Unmarshal(ext, &raw); err != nil {
+		t.Fatalf("unmarshal config.example.toml: %v", err)
+	}
+
+	def := Default()
+	for name, want := range map[string]string{"triage": def.Model.Triage.Model, "auto": def.Model.Auto.Model, "repair": def.Model.Repair.Model} {
+		got := raw.Model.Triage.Model
+		if name == "auto" {
+			got = raw.Model.Auto.Model
+		}
+		if name == "repair" {
+			got = raw.Model.Repair.Model
+		}
+		if got != want {
+			t.Errorf("example model.%s.model = %q, want %q (Default().Model.%s.Model)", name, got, want, name)
+		}
+	}
+	if raw.Model.Approved.Model != def.Model.Approved.Model {
+		t.Errorf("example model.approved.model = %q, want %q", raw.Model.Approved.Model, def.Model.Approved.Model)
+	}
+	for i, prov := range def.Routing.LocalProviders {
+		if i >= len(raw.Routing.LocalProviders) || raw.Routing.LocalProviders[i] != prov {
+			t.Errorf("example routing.local_providers[%d] = %q, want %q", i, raw.Routing.LocalProviders[i], prov)
+		}
+	}
+	for model, ctx := range def.Routing.LocalContextTokens {
+		got, ok := raw.Routing.LocalContextTokens[model]
+		if !ok {
+			t.Errorf("example routing.local_context_tokens missing %q", model)
+		} else if got != ctx {
+			t.Errorf("example routing.local_context_tokens[%q] = %d, want %d", model, got, ctx)
+		}
 	}
 }
